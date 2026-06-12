@@ -7,6 +7,21 @@ import {
 	boolean
 } from 'drizzle-orm/pg-core';
 
+export const userSettings = pgTable('user_settings', {
+	id: integer('id').primaryKey().default(1),
+	grossIncome: integer('gross_income').notNull().default(555000),
+	netMonthly: integer('net_monthly').notNull().default(33000),
+	savings: integer('savings').notNull().default(250000),
+	parentalGift: integer('parental_gift').notNull().default(250000),
+	combinedIncome: integer('combined_income').notNull().default(2555000),
+	interestRate: doublePrecision('interest_rate').notNull().default(5.0),
+	stressRate: doublePrecision('stress_rate').notNull().default(7.0),
+	loanYears: integer('loan_years').notNull().default(30),
+	minEquityPct: integer('min_equity_pct').notNull().default(10)
+});
+
+export type UserSettings = typeof userSettings.$inferSelect;
+
 export const listings = pgTable('listings', {
 	finnkode: text('finnkode').primaryKey(),
 	heading: text('heading').notNull(),
