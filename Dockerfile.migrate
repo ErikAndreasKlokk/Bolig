@@ -1,0 +1,12 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY drizzle.config.ts ./
+COPY src/lib/server/db/schema.ts ./src/lib/server/db/
+COPY tsconfig.json ./
+
+CMD ["npx", "drizzle-kit", "push", "--force"]
