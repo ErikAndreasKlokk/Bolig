@@ -58,7 +58,9 @@ function decode(s: string): string {
 		.replace(/&AElig;/g, 'Æ')
 		.replace(/&nbsp;/g, ' ')
 		// Finn uses U+2219 BULLET OPERATOR as separator
-		.replace(/∙/g, '·');
+		.replace(/∙/g, '·')
+		// Strip C0 control characters incl. NUL — Postgres rejects them in text columns
+		.split('').filter((ch) => { const cc = ch.charCodeAt(0); return cc >= 32 || cc === 9 || cc === 10 || cc === 13; }).join('');
 }
 
 function parseInt(s: string | undefined): number | null {
