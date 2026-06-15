@@ -20,6 +20,32 @@
 		return { green: 'Innen budsjett', amber: 'Strakk', red: 'Over evne' }[level];
 	}
 
+	// Build SVG polyline points for a price sparkline (equal x-spacing, y normalized to range)
+	function sparkPoints(history: number[], w = 120, h = 28): string {
+		if (history.length < 2) return '';
+		const min = Math.min(...history);
+		const max = Math.max(...history);
+		const range = max - min || 1;
+		const n = history.length;
+		return history
+			.map((p, i) => {
+				const x = (i / (n - 1)) * w;
+				const y = h - ((p - min) / range) * h;
+				return `${x.toFixed(1)},${y.toFixed(1)}`;
+			})
+			.join(' ');
+	}
+
+	function priceTrend(history: number[]): { dir: 'down' | 'up' | 'flat'; diff: number } {
+		if (history.length < 2) return { dir: 'flat', diff: 0 };
+		const diff = history[history.length - 1] - history[0];
+		return { dir: diff < 0 ? 'down' : diff > 0 ? 'up' : 'flat', diff };
+	}
+
+	function trendColor(dir: 'down' | 'up' | 'flat'): string {
+		return dir === 'down' ? 'text-green-600' : dir === 'up' ? 'text-red-600' : 'text-gray-400';
+	}
+
 	function flagQuery(key: string, on: boolean): string {
 		const p = new URLSearchParams();
 		if (data.showHidden && key !== 'hidden') p.set('hidden', '1');
@@ -127,6 +153,28 @@
 						<span class="font-medium {l.travelMinutes !== null && l.travelMinutes <= 30 ? 'text-green-600' : 'text-gray-700'}">
 							🚇 {l.travelMinutes !== null ? `${l.travelMinutes} min` : 'ukjent'}
 						</span>
+						{#if l.priceHistory.length >= 2}
+							{@const trend = priceTrend(l.priceHistory)}
+							<span class="inline-flex items-center gap-1.5" title="Prisutvikling siden først sett">
+								<svg viewBox="0 0 120 28" class="h-7 w-[120px] {trendColor(trend.dir)}" preserveAspectRatio="none">
+									<polyline
+										points={sparkPoints(l.priceHistory)}
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linejoin="round"
+										stroke-linecap="round"
+										vector-effect="non-scaling-stroke"
+									/>
+								</svg>
+								{#if trend.dir !== 'flat'}
+									<span class="text-xs font-medium {trendColor(trend.dir)}">
+										{trend.dir === 'down' ? '↓' : '↑'}
+										{Math.abs(trend.diff).toLocaleString('no-NO')} kr
+									</span>
+								{/if}
+							</span>
+						{/if}
 					</div>
 
 					{#if l.afford}

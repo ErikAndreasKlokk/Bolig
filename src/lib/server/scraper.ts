@@ -1,9 +1,9 @@
-import { eq, notInArray, isNull, and } from 'drizzle-orm';
+import { eq, notInArray, isNull, and, inArray } from 'drizzle-orm';
 import { db } from './db';
-import { listings, type Listing } from './db/schema';
+import { listings, priceHistory, type Listing } from './db/schema';
 import { fetchAllListings } from './finn';
 import { transitMinutesToWork, geocodeAddress } from './entur';
-import { notifyNewListings } from './discord';
+import { notifyNewListings, notifyPriceDrops, type PriceDrop } from './discord';
 
 let running = false;
 
@@ -25,15 +25,40 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	const fetched = await fetchAllListings();
 	console.log(`Fetched ${fetched.length} listings from Finn`);
 
-	const existing = await db.select({ finnkode: listings.finnkode }).from(listings);
-	const existingKeys = new Set(existing.map((e) => e.finnkode));
-	const isBootstrap = existingKeys.size === 0;
+	const existing = await db
+		.select({
+			finnkode: listings.finnkode,
+			priceTotal: listings.priceTotal,
+			priceSuggestion: listings.priceSuggestion
+		})
+		.from(listings);
+	const existingMap = new Map(existing.map((e) => [e.finnkode, e]));
+	const isBootstrap = existingMap.size === 0;
 
 	const now = new Date();
 	const newKeys: string[] = [];
+	// finnkodes whose effective price went down — full rows are fetched after the loop
+	const dropKeys: { finnkode: string; oldPrice: number; newPrice: number }[] = [];
 
 	for (const l of fetched) {
-		if (existingKeys.has(l.finnkode)) {
+		const prev = existingMap.get(l.finnkode);
+		if (prev) {
+			const priceChanged =
+				l.priceTotal !== prev.priceTotal || l.priceSuggestion !== prev.priceSuggestion;
+			if (priceChanged) {
+				await db.insert(priceHistory).values({
+					finnkode: l.finnkode,
+					priceTotal: l.priceTotal,
+					priceSuggestion: l.priceSuggestion,
+					recordedAt: now
+				});
+				// Use totalpris when available, otherwise prisantydning, as the comparable price
+				const oldPrice = prev.priceTotal ?? prev.priceSuggestion;
+				const newPrice = l.priceTotal ?? l.priceSuggestion;
+				if (oldPrice !== null && newPrice !== null && newPrice < oldPrice) {
+					dropKeys.push({ finnkode: l.finnkode, oldPrice, newPrice });
+				}
+			}
 			await db
 				.update(listings)
 				.set({
@@ -48,6 +73,13 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 				.where(eq(listings.finnkode, l.finnkode));
 		} else {
 			await db.insert(listings).values({ ...l, lastSeenAt: now });
+			// Seed the history with the first observed price so graphs have a starting point
+			await db.insert(priceHistory).values({
+				finnkode: l.finnkode,
+				priceTotal: l.priceTotal,
+				priceSuggestion: l.priceSuggestion,
+				recordedAt: now
+			});
 			newKeys.push(l.finnkode);
 		}
 	}
@@ -114,7 +146,29 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 		await markNotified(unnotified, now);
 	}
 
-	console.log(`Scrape done: ${fetched.length} total, ${newKeys.length} new`);
+	// Notify about price drops on already-known listings (never on the bootstrap run)
+	if (!isBootstrap && dropKeys.length > 0) {
+		const rows = await db
+			.select()
+			.from(listings)
+			.where(
+				inArray(
+					listings.finnkode,
+					dropKeys.map((d) => d.finnkode)
+				)
+			);
+		const byKey = new Map(rows.map((r) => [r.finnkode, r]));
+		const drops: PriceDrop[] = dropKeys
+			.map((d) => {
+				const listing = byKey.get(d.finnkode);
+				return listing ? { listing, oldPrice: d.oldPrice, newPrice: d.newPrice } : null;
+			})
+			.filter((d): d is PriceDrop => d !== null && !d.listing.hidden);
+		if (drops.length > 0) await notifyPriceDrops(drops);
+		console.log(`Notified ${drops.length} price drops`);
+	}
+
+	console.log(`Scrape done: ${fetched.length} total, ${newKeys.length} new, ${dropKeys.length} price drops`);
 	return { total: fetched.length, added: newKeys.length };
 }
 

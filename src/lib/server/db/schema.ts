@@ -4,7 +4,9 @@ import {
 	integer,
 	doublePrecision,
 	timestamp,
-	boolean
+	boolean,
+	serial,
+	index
 } from 'drizzle-orm/pg-core';
 
 export const userSettings = pgTable('user_settings', {
@@ -50,3 +52,19 @@ export const listings = pgTable('listings', {
 
 export type Listing = typeof listings.$inferSelect;
 export type NewListing = typeof listings.$inferInsert;
+
+// One row per observed price change for a listing (also seeded on first sight),
+// so we can show a price graph and detect drops over time.
+export const priceHistory = pgTable(
+	'price_history',
+	{
+		id: serial('id').primaryKey(),
+		finnkode: text('finnkode').notNull(),
+		priceTotal: integer('price_total'),
+		priceSuggestion: integer('price_suggestion'),
+		recordedAt: timestamp('recorded_at').notNull().defaultNow()
+	},
+	(t) => [index('price_history_finnkode_idx').on(t.finnkode)]
+);
+
+export type PriceHistory = typeof priceHistory.$inferSelect;

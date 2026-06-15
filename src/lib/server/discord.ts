@@ -47,3 +47,61 @@ export async function notifyNewListings(listings: Listing[]): Promise<void> {
 		if (i + 10 < listings.length) await new Promise((r) => setTimeout(r, 1000));
 	}
 }
+
+export interface PriceDrop {
+	listing: Listing;
+	oldPrice: number;
+	newPrice: number;
+}
+
+export async function notifyPriceDrops(drops: PriceDrop[]): Promise<void> {
+	const webhookUrl = env.DISCORD_WEBHOOK_URL;
+	if (!webhookUrl) {
+		console.warn('DISCORD_WEBHOOK_URL not set — skipping Discord notification');
+		return;
+	}
+
+	// Discord allows max 10 embeds per message
+	for (let i = 0; i < drops.length; i += 10) {
+		const batch = drops.slice(i, i + 10);
+		const embeds = batch.map(({ listing: l, oldPrice, newPrice }) => {
+			const diff = oldPrice - newPrice;
+			const pct = Math.round((diff / oldPrice) * 100);
+			return {
+				title: l.heading.slice(0, 256),
+				url: l.url,
+				color: 0x22c55e, // green — a price drop is good news
+				thumbnail: l.imageUrl ? { url: l.imageUrl } : undefined,
+				fields: [
+					{ name: 'Ny pris', value: formatPrice(newPrice), inline: true },
+					{ name: 'Tidligere', value: `~~${formatPrice(oldPrice)}~~`, inline: true },
+					{
+						name: 'Endring',
+						value: `−${diff.toLocaleString('no-NO')} kr (${pct}%)`,
+						inline: true
+					},
+					{ name: 'Størrelse', value: l.sizeM2 ? `${l.sizeM2} m²` : '?', inline: true },
+					{
+						name: 'Reisetid til jobb',
+						value: l.travelMinutes !== null ? `${l.travelMinutes} min` : '?',
+						inline: true
+					},
+					{ name: 'Område', value: l.localArea ?? l.address ?? '?', inline: true }
+				]
+			};
+		});
+
+		const res = await fetch(webhookUrl, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				content: `📉 ${batch.length} prisfall på Finn!`,
+				embeds
+			})
+		});
+		if (!res.ok) {
+			console.error(`Discord webhook failed: ${res.status} ${await res.text()}`);
+		}
+		if (i + 10 < drops.length) await new Promise((r) => setTimeout(r, 1000));
+	}
+}
