@@ -157,13 +157,16 @@ async function fetchPage(page: number): Promise<{ listings: FinnListing[]; nextP
 		.map((c) => extractCard('<article class="sf-search-ad"' + c))
 		.filter((l): l is FinnListing => l !== null);
 
-	// Next-page indicator — Finn renders a "Neste side" link in the pagination footer
-	const nextPage = html.includes(`&page=${page + 1}`) || html.includes(`?page=${page + 1}`);
+	// Next-page indicator. Finn's pagination link is HTML-entity-encoded (`&amp;page=N`) and
+	// tagged rel="next", so the old `&page=N`/`?page=N` checks never matched — we only ever
+	// scraped page 1 and marked every older (still-listed) home inactive. Match the link by its
+	// trailing `page=N"` regardless of how the ampersand is encoded, with rel="next" as backup.
+	const nextPage = html.includes(`page=${page + 1}"`) || /rel="next"/.test(html);
 
 	return { listings, nextPage };
 }
 
-export async function fetchAllListings(maxPages = 30): Promise<FinnListing[]> {
+export async function fetchAllListings(maxPages = 50): Promise<FinnListing[]> {
 	const all: FinnListing[] = [];
 	let page = 1;
 
