@@ -43,18 +43,32 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	for (const l of fetched) {
 		const prev = existingMap.get(l.finnkode);
 		if (prev) {
+			// A scrape can miss a field (Finn's markup varies) and return null where we
+			// previously had a value. Keep the known price instead of wiping it — otherwise the
+			// effective price falls back to the (lower) prisantydning and looks like a price drop.
+			const newTotal = l.priceTotal ?? prev.priceTotal;
+			const newSuggestion = l.priceSuggestion ?? prev.priceSuggestion;
+
 			const priceChanged =
-				l.priceTotal !== prev.priceTotal || l.priceSuggestion !== prev.priceSuggestion;
+				newTotal !== prev.priceTotal || newSuggestion !== prev.priceSuggestion;
 			if (priceChanged) {
 				await db.insert(priceHistory).values({
 					finnkode: l.finnkode,
-					priceTotal: l.priceTotal,
-					priceSuggestion: l.priceSuggestion,
+					priceTotal: newTotal,
+					priceSuggestion: newSuggestion,
 					recordedAt: now
 				});
-				// Use totalpris when available, otherwise prisantydning, as the comparable price
-				const oldPrice = prev.priceTotal ?? prev.priceSuggestion;
-				const newPrice = l.priceTotal ?? l.priceSuggestion;
+				// Compare like with like: only flag a drop when the *same* metric fell. Prefer
+				// totalpris when both old and new have it, otherwise compare prisantydning.
+				let oldPrice: number | null = null;
+				let newPrice: number | null = null;
+				if (prev.priceTotal !== null && newTotal !== null) {
+					oldPrice = prev.priceTotal;
+					newPrice = newTotal;
+				} else if (prev.priceSuggestion !== null && newSuggestion !== null) {
+					oldPrice = prev.priceSuggestion;
+					newPrice = newSuggestion;
+				}
 				if (oldPrice !== null && newPrice !== null && newPrice < oldPrice) {
 					dropKeys.push({ finnkode: l.finnkode, oldPrice, newPrice });
 				}
@@ -63,8 +77,8 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 				.update(listings)
 				.set({
 					heading: l.heading,
-					priceTotal: l.priceTotal,
-					priceSuggestion: l.priceSuggestion,
+					priceTotal: newTotal,
+					priceSuggestion: newSuggestion,
 					sharedCost: l.sharedCost,
 					imageUrl: l.imageUrl,
 					lastSeenAt: now,

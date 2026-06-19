@@ -1,4 +1,4 @@
-import { eq, asc, and, sql, inArray, type SQL } from 'drizzle-orm';
+import { eq, asc, and, or, sql, inArray, type SQL } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { listings, priceHistory } from '$lib/server/db/schema';
 import { getSettings } from '$lib/server/settings';
@@ -14,10 +14,15 @@ export const load: PageServerLoad = async ({ url }) => {
 	if (!showHidden) conditions.push(eq(listings.hidden, false));
 	if (!showInactive) conditions.push(eq(listings.active, true));
 
+	// Favorites stay pinned even after they go inactive (sold / dropped off Finn) or get
+	// hidden, so a listing you starred doesn't silently vanish the next day.
+	const visibility =
+		conditions.length > 0 ? or(eq(listings.favorite, true), and(...conditions)) : undefined;
+
 	const rows = await db
 		.select()
 		.from(listings)
-		.where(conditions.length > 0 ? and(...conditions) : undefined)
+		.where(visibility)
 		.orderBy(
 			sql`${listings.favorite} desc`,
 			sql`${listings.travelMinutes} asc nulls last`,

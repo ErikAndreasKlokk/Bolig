@@ -125,7 +125,12 @@
 
 				<div class="min-w-0 flex-1">
 					<div class="flex items-start justify-between gap-3">
-						<a href={l.url} target="_blank" rel="noopener noreferrer" class="hover:underline">
+						<a
+							href={l.url}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="min-w-0 flex-1 hover:underline"
+						>
 							<h2 class="truncate font-semibold">{l.heading}</h2>
 						</a>
 						{#if l.afford}
