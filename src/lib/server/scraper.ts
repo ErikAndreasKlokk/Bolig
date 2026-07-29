@@ -49,8 +49,7 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 			const newTotal = l.priceTotal ?? prev.priceTotal;
 			const newSuggestion = l.priceSuggestion ?? prev.priceSuggestion;
 
-			const priceChanged =
-				newTotal !== prev.priceTotal || newSuggestion !== prev.priceSuggestion;
+			const priceChanged = newTotal !== prev.priceTotal || newSuggestion !== prev.priceSuggestion;
 			if (priceChanged) {
 				await db.insert(priceHistory).values({
 					finnkode: l.finnkode,
@@ -144,13 +143,12 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	}
 
 	// Notify about new listings — but not on the very first run (would spam hundreds)
-	const unnotified = await db
-		.select()
-		.from(listings)
-		.where(isNull(listings.notifiedAt));
+	const unnotified = await db.select().from(listings).where(isNull(listings.notifiedAt));
 
 	if (isBootstrap) {
-		console.log(`Bootstrap run — marking ${unnotified.length} listings as notified without sending`);
+		console.log(
+			`Bootstrap run — marking ${unnotified.length} listings as notified without sending`
+		);
 		await markNotified(unnotified, now);
 	} else if (unnotified.length > 0) {
 		const sorted = [...unnotified].sort(
@@ -182,7 +180,9 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 		console.log(`Notified ${drops.length} price drops`);
 	}
 
-	console.log(`Scrape done: ${fetched.length} total, ${newKeys.length} new, ${dropKeys.length} price drops`);
+	console.log(
+		`Scrape done: ${fetched.length} total, ${newKeys.length} new, ${dropKeys.length} price drops`
+	);
 	return { total: fetched.length, added: newKeys.length };
 }
 

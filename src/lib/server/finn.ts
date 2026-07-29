@@ -44,23 +44,30 @@ function buildUrl(page: number): string {
 }
 
 function decode(s: string): string {
-	return s
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/&aring;/g, 'å')
-		.replace(/&Aring;/g, 'Å')
-		.replace(/&oslash;/g, 'ø')
-		.replace(/&Oslash;/g, 'Ø')
-		.replace(/&aelig;/g, 'æ')
-		.replace(/&AElig;/g, 'Æ')
-		.replace(/&nbsp;/g, ' ')
-		// Finn uses U+2219 BULLET OPERATOR as separator
-		.replace(/∙/g, '·')
-		// Strip C0 control characters incl. NUL — Postgres rejects them in text columns
-		.split('').filter((ch) => { const cc = ch.charCodeAt(0); return cc >= 32 || cc === 9 || cc === 10 || cc === 13; }).join('');
+	return (
+		s
+			.replace(/&amp;/g, '&')
+			.replace(/&lt;/g, '<')
+			.replace(/&gt;/g, '>')
+			.replace(/&quot;/g, '"')
+			.replace(/&#39;/g, "'")
+			.replace(/&aring;/g, 'å')
+			.replace(/&Aring;/g, 'Å')
+			.replace(/&oslash;/g, 'ø')
+			.replace(/&Oslash;/g, 'Ø')
+			.replace(/&aelig;/g, 'æ')
+			.replace(/&AElig;/g, 'Æ')
+			.replace(/&nbsp;/g, ' ')
+			// Finn uses U+2219 BULLET OPERATOR as separator
+			.replace(/∙/g, '·')
+			// Strip C0 control characters incl. NUL — Postgres rejects them in text columns
+			.split('')
+			.filter((ch) => {
+				const cc = ch.charCodeAt(0);
+				return cc >= 32 || cc === 9 || cc === 10 || cc === 13;
+			})
+			.join('')
+	);
 }
 
 function parseInt(s: string | undefined): number | null {
@@ -100,9 +107,9 @@ function extractCard(html: string): FinnListing | null {
 	const priceSuggestion = sizeRowMatch ? parseInt(sizeRowMatch[2]) : null;
 
 	// Totalpris + Fellesutg + Selveier ∙ Leilighet
-	const totalMatch = html.match(/Totalpris:\s*([\d\s ]+)\s*kr/);
+	const totalMatch = html.match(/Totalpris:\s*([\d\s\u00a0]+)\s*kr/);
 	const priceTotal = totalMatch ? parseInt(totalMatch[1]) : null;
-	const sharedMatch = html.match(/Fellesutg\.:\s*([\d\s ]+)\s*kr/);
+	const sharedMatch = html.match(/Fellesutg\.:\s*([\d\s\u00a0]+)\s*kr/);
 	const sharedCost = sharedMatch ? parseInt(sharedMatch[1]) : null;
 
 	// Owner + property type — final <span> in the description line
