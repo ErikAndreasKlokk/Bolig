@@ -6,6 +6,26 @@ export interface Viewing {
 	calendarUrl: string | null;
 }
 
+export interface ListingImage {
+	url: string;
+	caption: string | null;
+}
+
+/** A label/value row from the ad's key facts or price details, e.g. "Byggeår" / "2003". */
+export interface ListingFact {
+	label: string;
+	value: string;
+}
+
+/** Extra detail loaded on demand for the listing drawer (see /api/listing/[finnkode]). */
+export interface ListingDetail {
+	images: ListingImage[];
+	facts: ListingFact[];
+	description: string | null;
+	facilities: string[];
+	history: { price: number; at: string }[];
+}
+
 export const LISTING_STATUSES = ['interessert', 'visning', 'budt', 'avslatt'] as const;
 export type ListingStatus = (typeof LISTING_STATUSES)[number];
 

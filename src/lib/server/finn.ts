@@ -1,6 +1,6 @@
 // Finn.no has no public JSON search endpoint — the listings page is server-rendered HTML.
 // We parse the `<article class="sf-search-ad">` cards directly.
-import type { Viewing } from '$lib/listing';
+import type { ListingFact, ListingImage, Viewing } from '$lib/listing';
 
 const SEARCH_URL = 'https://www.finn.no/realestate/homes/search.html';
 
@@ -45,6 +45,8 @@ function buildUrl(page: number): string {
 	return `${SEARCH_URL}?${p}`;
 }
 
+const parseInt16 = (s: string) => Number.parseInt(s, 16);
+
 function decode(s: string): string {
 	return (
 		s
@@ -53,6 +55,8 @@ function decode(s: string): string {
 			.replace(/&gt;/g, '>')
 			.replace(/&quot;/g, '"')
 			.replace(/&#39;/g, "'")
+			.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+			.replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt16(n)))
 			.replace(/&aring;/g, 'å')
 			.replace(/&Aring;/g, 'Å')
 			.replace(/&oslash;/g, 'ø')
@@ -192,6 +196,95 @@ export interface FinnDetails {
 	floor: number | null;
 	constructionYear: number | null;
 	viewings: Viewing[];
+	images: ListingImage[];
+	facts: ListingFact[];
+	description: string | null;
+	facilities: string[];
+}
+
+const IMAGE_BASE = 'https://images.finncdn.no/dynamic/1280w/';
+
+// The server-rendered carousel <img> tags all carry the *first* photo's src (the rest is swapped
+// in client-side), but their `title` captions are correct per index. Take the photo list from
+// the targeting array (homes) or, for project pages without one, from the `item/<id>/<uuid>`
+// paths in the embedded data, and pair them with the captions by index.
+function parseImages(html: string, kv: string | undefined): ListingImage[] {
+	let paths: string[] = [];
+	if (kv) {
+		try {
+			paths = JSON.parse(`[${kv}]`) as string[];
+		} catch {
+			paths = [];
+		}
+	}
+	if (paths.length === 0) {
+		paths = [
+			...new Set(
+				[...html.matchAll(/images\.finncdn\.no\/dynamic\/[^/]+\/(item\/\d+\/[0-9a-f-]{36})/g)].map(
+					(m) => m[1]
+				)
+			)
+		];
+	}
+	const captions = new Map<number, string>();
+	for (const m of html.matchAll(/<img[^>]*id="image-(\d+)"[^>]*>/g)) {
+		const title = m[0].match(/title="([^"]*)"/)?.[1];
+		if (title) captions.set(Number(m[1]), decode(title));
+	}
+	return paths
+		.slice(0, 80)
+		.map((p, i) => ({ url: IMAGE_BASE + p, caption: captions.get(i) ?? null }));
+}
+
+// Key facts + price details: <div data-testid="info-…|pricing-…"><dt>Label</dt><dd>Value</dd></div>
+function parseFacts(html: string): ListingFact[] {
+	const facts: ListingFact[] = [];
+	const re =
+		/data-testid="(?:info|pricing)-[a-z-]+"[^>]*>\s*<dt[^>]*>([^<]*)<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>/g;
+	for (const m of html.matchAll(re)) {
+		const label = decode(m[1]).trim();
+		// Energy label is an SVG badge — its text lives in aria-label ("Energimerke E")
+		const value =
+			decode(m[2].replace(/<[^>]*>/g, ' '))
+				.replace(/\s+/g, ' ')
+				.trim() ||
+			decode(m[2].match(/aria-label="([^"]*)"/)?.[1] ?? '').replace(/^Energimerke\s*/, '');
+		if (label && value && !facts.some((f) => f.label === label)) facts.push({ label, value });
+	}
+	return facts;
+}
+
+// "Om boligen" body, flattened to plain text with paragraph breaks (rendered as text, not HTML)
+function parseDescription(html: string): string | null {
+	const start = html.indexOf('data-testid="about-property"');
+	if (start < 0) return null;
+	const m = html.slice(start, start + 60_000).match(/description-area[^>]*>([\s\S]*?)<\/div>/);
+	if (!m) return null;
+	const text = decode(
+		m[1]
+			.replace(/<br\s*\/?>/gi, '\n')
+			.replace(/<\/(p|h\d|li)>/gi, '\n')
+			.replace(/<li[^>]*>/gi, '• ')
+			.replace(/<[^>]*>/g, '')
+	)
+		.replace(/[ \t]+\n/g, '\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+	return text ? text.slice(0, 20_000) : null;
+}
+
+function parseFacilities(kv: string | undefined): string[] {
+	if (!kv) return [];
+	try {
+		return (JSON.parse(`[${kv}]`) as string[]).map(decode);
+	} catch {
+		return [];
+	}
+}
+
+// Raw JSON array body of a multi-value targeting key, e.g. `"a.jpg","b.jpg"`
+function targetingArray(html: string, key: string): string | undefined {
+	return html.match(new RegExp(`\\{"key":"${key}","value":\\[([^\\]]*)\\]`))?.[1];
 }
 
 // The detail page embeds an ad-targeting array of `{"key":"bedrooms","value":["3"]}` entries —
@@ -289,7 +382,11 @@ export async function fetchDetails(url: string): Promise<FinnDetails | null> {
 		rooms: num('rooms', 'rooms'),
 		floor: num('floor', 'floor'),
 		constructionYear: num('construction_year', 'construction-year'),
-		viewings: parseViewings(html)
+		viewings: parseViewings(html),
+		images: parseImages(html, targetingArray(html, 'images')),
+		facts: parseFacts(html),
+		description: parseDescription(html),
+		facilities: parseFacilities(targetingArray(html, 'facilities'))
 	};
 }
 

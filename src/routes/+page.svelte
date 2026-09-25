@@ -2,7 +2,9 @@
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
+	import { pushState, replaceState } from '$app/navigation';
 	import ListingMap from '$lib/components/ListingMap.svelte';
+	import ListingDrawer from '$lib/components/ListingDrawer.svelte';
 	import { formatViewing, LISTING_STATUSES, STATUS_LABELS, type ListingStatus } from '$lib/listing';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData } from './$types';
@@ -81,6 +83,23 @@
 	function submitOnChange(e: Event) {
 		(e.currentTarget as HTMLElement).closest('form')?.requestSubmit();
 	}
+
+	// Drawer state lives in shallow-routing history, so Back (or swipe-back on a phone) closes it
+	function openListing(finnkode: string) {
+		if (page.state.listing) replaceState('', { listing: finnkode });
+		else pushState('', { listing: finnkode });
+	}
+
+	// Agenda entries can be filtered out of the list, so they carry their own listing
+	const openListingData = $derived.by(() => {
+		const k = page.state.listing;
+		if (!k) return null;
+		return (
+			data.listings.find((l) => l.finnkode === k) ??
+			data.agenda.find((a) => a.finnkode === k)?.listing ??
+			null
+		);
+	});
 
 	const f = $derived(data.filters);
 	const activeFilterCount = $derived(
@@ -171,9 +190,13 @@
 					<li class="flex flex-wrap items-baseline gap-x-3">
 						<span class="w-40 shrink-0 font-medium text-violet-900">{formatViewing(a.viewing)}</span
 						>
-						<a href="#l-{a.finnkode}" class="min-w-0 truncate hover:underline">
+						<button
+							type="button"
+							onclick={() => openListing(a.finnkode)}
+							class="min-w-0 cursor-pointer truncate text-left hover:underline"
+						>
 							{a.address ?? a.heading}
-						</a>
+						</button>
 						{#if a.status}
 							<span class="text-xs text-violet-700">{STATUS_LABELS[a.status]}</span>
 						{/if}
@@ -324,7 +347,7 @@
 	</form>
 
 	{#if data.view === 'kart'}
-		<ListingMap listings={data.listings} />
+		<ListingMap listings={data.listings} onopen={openListing} />
 	{:else}
 		{#if data.listings.length === 0}
 			<p class="py-16 text-center text-gray-500">Ingen boliger matcher filtrene.</p>
@@ -338,31 +361,44 @@
 					{l.favorite ? 'border-amber-400' : 'border-gray-200'}
 					{!l.active || l.status === 'avslatt' ? 'opacity-50' : ''}"
 				>
-					{#if l.imageUrl}
-						<img
-							src={l.imageUrl}
-							alt={l.heading}
-							class="h-44 w-full shrink-0 rounded-lg object-cover sm:h-28 sm:w-40"
-							loading="lazy"
-						/>
-					{:else}
-						<div
-							class="flex h-44 w-full shrink-0 items-center justify-center rounded-lg bg-gray-100 text-3xl sm:h-28 sm:w-40"
-						>
-							🏢
-						</div>
-					{/if}
+					<button
+						type="button"
+						onclick={() => openListing(l.finnkode)}
+						class="group relative shrink-0 cursor-pointer overflow-hidden rounded-lg"
+						aria-label="Vis detaljer for {l.heading}"
+					>
+						{#if l.imageUrl}
+							<img
+								src={l.imageUrl}
+								alt=""
+								class="h-44 w-full object-cover transition group-hover:scale-105 sm:h-28 sm:w-40"
+								loading="lazy"
+							/>
+						{:else}
+							<div
+								class="flex h-44 w-full items-center justify-center bg-gray-100 text-3xl sm:h-28 sm:w-40"
+							>
+								🏢
+							</div>
+						{/if}
+					</button>
 
 					<div class="min-w-0 flex-1">
 						<div class="flex items-start justify-between gap-3">
+							<button
+								type="button"
+								onclick={() => openListing(l.finnkode)}
+								class="min-w-0 flex-1 cursor-pointer text-left hover:underline"
+							>
+								<h2 class="line-clamp-2 font-semibold sm:line-clamp-1">{l.heading}</h2>
+							</button>
 							<a
 								href={l.url}
 								target="_blank"
 								rel="external noopener noreferrer"
-								class="min-w-0 flex-1 hover:underline"
+								class="shrink-0 text-xs whitespace-nowrap text-gray-400 hover:text-blue-600"
+								title="Åpne på Finn">Finn ↗</a
 							>
-								<h2 class="line-clamp-2 font-semibold sm:line-clamp-1">{l.heading}</h2>
-							</a>
 							{#if l.afford}
 								<span
 									class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset {badgeClass(
@@ -556,3 +592,11 @@
 		</ul>
 	{/if}
 </div>
+
+{#if openListingData}
+	<ListingDrawer
+		listing={openListingData}
+		interestRate={data.settings.interestRate}
+		onclose={() => history.back()}
+	/>
+{/if}

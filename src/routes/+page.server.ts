@@ -1,4 +1,4 @@
-import { eq, asc, and, or, inArray, type SQL } from 'drizzle-orm';
+import { eq, asc, and, or, inArray, getTableColumns, type SQL } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { listings, priceHistory } from '$lib/server/db/schema';
@@ -59,7 +59,18 @@ export const load: PageServerLoad = async ({ url }) => {
 	const visibility =
 		conditions.length > 0 ? or(eq(listings.favorite, true), and(...conditions)) : undefined;
 
-	const rows = await db.select().from(listings).where(visibility);
+	// Images, facts and description are only needed in the drawer, which loads them on demand
+	// (/api/listing/[finnkode]) — leave them out of this ~900-row query.
+	/* eslint-disable @typescript-eslint/no-unused-vars -- destructured only to leave them out */
+	const {
+		images: _images,
+		facts: _facts,
+		description: _description,
+		facilities: _facilities,
+		...cardColumns
+	} = getTableColumns(listings);
+	/* eslint-enable @typescript-eslint/no-unused-vars */
+	const rows = await db.select(cardColumns).from(listings).where(visibility);
 	const settings = await getSettings();
 
 	const all = rows.map((l) => ({
@@ -87,7 +98,8 @@ export const load: PageServerLoad = async ({ url }) => {
 				finnkode: l.finnkode,
 				heading: l.heading,
 				address: l.address,
-				status: l.status
+				status: l.status,
+				listing: l
 			}))
 		)
 		.sort((a, b) => a.viewing.start.localeCompare(b.viewing.start))

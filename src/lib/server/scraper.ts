@@ -201,6 +201,19 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	return { total: fetched.length, added: newKeys.length };
 }
 
+/** Fetch one ad's detail page and store it. A gone ad (404) is marked fetched with no data. */
+export async function refreshDetails(finnkode: string, url: string, now = new Date()) {
+	const d = await fetchDetails(url);
+	await db
+		.update(listings)
+		.set(
+			d
+				? { ...d, detailsFetchedAt: now }
+				: { viewings: [], images: [], facts: [], facilities: [], detailsFetchedAt: now }
+		)
+		.where(eq(listings.finnkode, finnkode));
+}
+
 // Detail pages cost one request each (~900 active listings), so spread them over runs.
 const DETAIL_BUDGET = 150;
 // Viewings get added/changed after publication, so re-fetch relevant listings this often.
@@ -221,6 +234,8 @@ async function enrichDetails(now: Date): Promise<void> {
 		.where(
 			or(
 				isNull(listings.detailsFetchedAt),
+				// Enriched before photos/facts were stored — backfill once
+				and(eq(listings.active, true), isNull(listings.images)),
 				and(
 					eq(listings.active, true),
 					lt(listings.detailsFetchedAt, staleBefore),
@@ -233,6 +248,7 @@ async function enrichDetails(now: Date): Promise<void> {
 			)
 		)
 		.orderBy(
+			sql`case when ${listings.detailsFetchedAt} is null then 0 when ${listings.images} is null then 1 else 2 end`,
 			sql`${listings.detailsFetchedAt} asc nulls first`,
 			desc(listings.active),
 			desc(listings.firstSeenAt)
@@ -243,11 +259,7 @@ async function enrichDetails(now: Date): Promise<void> {
 	let failures = 0;
 	for (const { finnkode, url } of due) {
 		try {
-			const d = await fetchDetails(url);
-			await db
-				.update(listings)
-				.set(d ? { ...d, detailsFetchedAt: now } : { viewings: [], detailsFetchedAt: now })
-				.where(eq(listings.finnkode, finnkode));
+			await refreshDetails(finnkode, url, now);
 			ok++;
 			failures = 0;
 		} catch (e) {

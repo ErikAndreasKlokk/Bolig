@@ -20,7 +20,8 @@
 		active: boolean;
 	}
 
-	let { listings }: { listings: MapListing[] } = $props();
+	let { listings, onopen }: { listings: MapListing[]; onopen?: (finnkode: string) => void } =
+		$props();
 
 	// Verkstedveien 1, Skøyen — same point Entur routes to (see server/entur.ts)
 	const WORK: [number, number] = [59.92152, 10.69847];
@@ -56,9 +57,13 @@
 		return `
 			<div style="width:220px">
 				${l.imageUrl ? `<img src="${esc(l.imageUrl)}" alt="" style="width:100%;height:110px;object-fit:cover;border-radius:6px;margin-bottom:6px">` : ''}
-				<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="font-weight:600">${l.favorite ? '★ ' : ''}${esc(l.heading)}</a>
+				<a href="${esc(l.url)}" data-open="${esc(l.finnkode)}" style="font-weight:600;cursor:pointer">${l.favorite ? '★ ' : ''}${esc(l.heading)}</a>
 				<div style="color:#6b7280;margin-top:2px">${esc(l.address ?? '')}</div>
 				<div style="margin-top:4px">${facts.join(' · ')}</div>
+				<div style="margin-top:6px;display:flex;gap:12px">
+					<a href="#" data-open="${esc(l.finnkode)}">Vis detaljer</a>
+					<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">Finn ↗</a>
+				</div>
 			</div>`;
 	}
 
@@ -124,7 +129,19 @@
 </script>
 
 <div class="overflow-hidden rounded-xl border border-gray-200">
-	<div bind:this={container} class="h-[70vh] min-h-[400px] w-full"></div>
+	<!-- Popups are Leaflet HTML strings, so catch their "open drawer" links by delegation -->
+	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+	<div
+		bind:this={container}
+		class="h-[70vh] min-h-[400px] w-full"
+		onclick={(e) => {
+			const link = (e.target as HTMLElement).closest<HTMLElement>('[data-open]');
+			if (link && onopen) {
+				e.preventDefault();
+				onopen(link.dataset.open!);
+			}
+		}}
+	></div>
 </div>
 <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600">
 	{#each BUCKETS as b (b.label)}

@@ -10,7 +10,7 @@ import {
 	jsonb
 } from 'drizzle-orm/pg-core';
 // Relative (not $lib) so drizzle-kit can resolve it outside Vite
-import type { ListingStatus, Viewing } from '../../listing';
+import type { ListingFact, ListingImage, ListingStatus, Viewing } from '../../listing';
 
 export const userSettings = pgTable('user_settings', {
 	id: integer('id').primaryKey().default(1),
@@ -57,6 +57,10 @@ export const listings = pgTable('listings', {
 	floor: integer('floor'),
 	constructionYear: integer('construction_year'),
 	viewings: jsonb('viewings').$type<Viewing[]>(),
+	images: jsonb('images').$type<ListingImage[]>(),
+	facts: jsonb('facts').$type<ListingFact[]>(),
+	description: text('description'),
+	facilities: jsonb('facilities').$type<string[]>(),
 	detailsFetchedAt: timestamp('details_fetched_at'),
 	// Personal tracking
 	status: text('status').$type<ListingStatus>(),
