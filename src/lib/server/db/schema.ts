@@ -6,8 +6,11 @@ import {
 	timestamp,
 	boolean,
 	serial,
-	index
+	index,
+	jsonb
 } from 'drizzle-orm/pg-core';
+// Relative (not $lib) so drizzle-kit can resolve it outside Vite
+import type { ListingStatus, Viewing } from '../../listing';
 
 export const userSettings = pgTable('user_settings', {
 	id: integer('id').primaryKey().default(1),
@@ -47,7 +50,17 @@ export const listings = pgTable('listings', {
 	active: boolean('active').notNull().default(true),
 	hidden: boolean('hidden').notNull().default(false),
 	favorite: boolean('favorite').notNull().default(false),
-	notifiedAt: timestamp('notified_at')
+	notifiedAt: timestamp('notified_at'),
+	// From the ad detail page (the search card doesn't carry them) — see finn.fetchDetails
+	district: text('district'),
+	rooms: integer('rooms'),
+	floor: integer('floor'),
+	constructionYear: integer('construction_year'),
+	viewings: jsonb('viewings').$type<Viewing[]>(),
+	detailsFetchedAt: timestamp('details_fetched_at'),
+	// Personal tracking
+	status: text('status').$type<ListingStatus>(),
+	note: text('note')
 });
 
 export type Listing = typeof listings.$inferSelect;

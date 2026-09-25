@@ -1,7 +1,19 @@
-import { eq, notInArray, isNull, and, inArray } from 'drizzle-orm';
+import {
+	eq,
+	notInArray,
+	isNull,
+	isNotNull,
+	and,
+	or,
+	lt,
+	gt,
+	inArray,
+	desc,
+	sql
+} from 'drizzle-orm';
 import { db } from './db';
 import { listings, priceHistory, type Listing } from './db/schema';
-import { fetchAllListings } from './finn';
+import { fetchAllListings, fetchDetails } from './finn';
 import { transitMinutesToWork, geocodeAddress } from './entur';
 import { notifyNewListings, notifyPriceDrops, type PriceDrop } from './discord';
 
@@ -76,6 +88,7 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 				.update(listings)
 				.set({
 					heading: l.heading,
+					url: l.url,
 					priceTotal: newTotal,
 					priceSuggestion: newSuggestion,
 					sharedCost: l.sharedCost,
@@ -142,6 +155,8 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 		await new Promise((r) => setTimeout(r, 300));
 	}
 
+	await enrichDetails(now);
+
 	// Notify about new listings — but not on the very first run (would spam hundreds)
 	const unnotified = await db.select().from(listings).where(isNull(listings.notifiedAt));
 
@@ -184,6 +199,65 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 		`Scrape done: ${fetched.length} total, ${newKeys.length} new, ${dropKeys.length} price drops`
 	);
 	return { total: fetched.length, added: newKeys.length };
+}
+
+// Detail pages cost one request each (~900 active listings), so spread them over runs.
+const DETAIL_BUDGET = 150;
+// Viewings get added/changed after publication, so re-fetch relevant listings this often.
+const DETAIL_REFRESH_MS = 20 * 60 * 60 * 1000;
+// Refreshing all ~900 daily would be too many requests; viewings are mostly scheduled in the
+// first couple of weeks, so only keep refreshing recent listings and the ones you follow.
+const REFRESH_RECENT_MS = 14 * 24 * 60 * 60 * 1000;
+
+// Pull bedrooms, district and viewings from each ad's detail page. Never-fetched listings go
+// first (newest first, so this run's new listings are enriched before they're notified), then
+// the stalest relevant ones.
+async function enrichDetails(now: Date): Promise<void> {
+	const staleBefore = new Date(now.getTime() - DETAIL_REFRESH_MS);
+	const recentAfter = new Date(now.getTime() - REFRESH_RECENT_MS);
+	const due = await db
+		.select({ finnkode: listings.finnkode, url: listings.url })
+		.from(listings)
+		.where(
+			or(
+				isNull(listings.detailsFetchedAt),
+				and(
+					eq(listings.active, true),
+					lt(listings.detailsFetchedAt, staleBefore),
+					or(
+						eq(listings.favorite, true),
+						isNotNull(listings.status),
+						and(eq(listings.hidden, false), gt(listings.firstSeenAt, recentAfter))
+					)
+				)
+			)
+		)
+		.orderBy(
+			sql`${listings.detailsFetchedAt} asc nulls first`,
+			desc(listings.active),
+			desc(listings.firstSeenAt)
+		)
+		.limit(DETAIL_BUDGET);
+
+	let ok = 0;
+	let failures = 0;
+	for (const { finnkode, url } of due) {
+		try {
+			const d = await fetchDetails(url);
+			await db
+				.update(listings)
+				.set(d ? { ...d, detailsFetchedAt: now } : { viewings: [], detailsFetchedAt: now })
+				.where(eq(listings.finnkode, finnkode));
+			ok++;
+			failures = 0;
+		} catch (e) {
+			console.error(`Detail fetch for ${finnkode} failed:`, e);
+			// Several in a row usually means we're being rate-limited — try again next run
+			if (++failures >= 3) break;
+		}
+		await new Promise((r) => setTimeout(r, 800));
+	}
+	console.log(`Fetched details for ${ok}/${due.length} listings`);
 }
 
 async function markNotified(rows: Listing[], when: Date) {

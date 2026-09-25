@@ -1,8 +1,19 @@
 import { env } from '$env/dynamic/private';
 import type { Listing } from './db/schema';
+import { areaOf, formatViewing, upcomingViewings } from '$lib/listing';
 
 function formatPrice(n: number | null): string {
 	return n === null ? '?' : `${n.toLocaleString('no-NO')} kr`;
+}
+
+function area(l: Listing): string {
+	return areaOf(l) ?? l.localArea ?? '?';
+}
+
+function nextViewingField(l: Listing): { name: string; value: string; inline: boolean }[] {
+	const next = upcomingViewings(l.viewings)[0];
+	if (!next) return [];
+	return [{ name: 'Neste visning', value: formatViewing(next), inline: false }];
 }
 
 export async function notifyNewListings(listings: Listing[]): Promise<void> {
@@ -28,8 +39,10 @@ export async function notifyNewListings(listings: Listing[]): Promise<void> {
 					value: l.travelMinutes !== null ? `${l.travelMinutes} min` : '?',
 					inline: true
 				},
-				{ name: 'Område', value: l.localArea ?? l.address ?? '?', inline: true },
-				{ name: 'Type', value: `${l.propertyType ?? '?'} (${l.ownerType ?? '?'})`, inline: true }
+				{ name: 'Område', value: area(l), inline: true },
+				{ name: 'Type', value: `${l.propertyType ?? '?'} (${l.ownerType ?? '?'})`, inline: true },
+				{ name: 'Soverom', value: l.bedrooms !== null ? String(l.bedrooms) : '?', inline: true },
+				...nextViewingField(l)
 			]
 		}));
 
@@ -86,7 +99,8 @@ export async function notifyPriceDrops(drops: PriceDrop[]): Promise<void> {
 						value: l.travelMinutes !== null ? `${l.travelMinutes} min` : '?',
 						inline: true
 					},
-					{ name: 'Område', value: l.localArea ?? l.address ?? '?', inline: true }
+					{ name: 'Område', value: area(l), inline: true },
+					...nextViewingField(l)
 				]
 			};
 		});

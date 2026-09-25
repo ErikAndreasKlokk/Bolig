@@ -1,5 +1,7 @@
 // Finn.no has no public JSON search endpoint — the listings page is server-rendered HTML.
 // We parse the `<article class="sf-search-ad">` cards directly.
+import type { Viewing } from '$lib/listing';
+
 const SEARCH_URL = 'https://www.finn.no/realestate/homes/search.html';
 
 // Location codes (verified by selecting the area on finn.no and reading ?location=...)
@@ -128,6 +130,14 @@ function extractCard(html: string): FinnListing | null {
 		propertyType = parts[1] ?? null;
 	}
 
+	// Ad link — new-build projects live under /realestate/project(single)/, not /homes/
+	const hrefMatch = html.match(
+		/href="((?:https:\/\/www\.finn\.no)?\/realestate\/[a-z]+\/ad\.html\?finnkode=\d+)"/
+	);
+	const url = hrefMatch
+		? new URL(decode(hrefMatch[1]), 'https://www.finn.no').toString()
+		: `https://www.finn.no/realestate/homes/ad.html?finnkode=${finnkode}`;
+
 	// First image — use the 480w variant (good enough for cards)
 	const imgMatch = html.match(/src="(https:\/\/images\.finncdn\.no\/[^"]+)"/);
 	const imageUrl = imgMatch ? imgMatch[1] : null;
@@ -146,7 +156,7 @@ function extractCard(html: string): FinnListing | null {
 		ownerType,
 		lat: null, // Filled by geocoder later
 		lon: null,
-		url: `https://www.finn.no/realestate/homes/ad.html?finnkode=${finnkode}`,
+		url,
 		imageUrl,
 		publishedAt: null
 	};
@@ -158,6 +168,8 @@ async function fetchPage(page: number): Promise<{ listings: FinnListing[]; nextP
 	});
 	if (!res.ok) throw new Error(`Finn search failed: ${res.status} ${res.statusText}`);
 	const html = await res.text();
+
+	if (page === 1) learnOsloDistricts(html);
 
 	const cards = html.split(/<article class="[^"]*sf-search-ad[^"]*"/).slice(1);
 	const listings = cards
@@ -171,6 +183,114 @@ async function fetchPage(page: number): Promise<{ listings: FinnListing[]; nextP
 	const nextPage = html.includes(`page=${page + 1}"`) || /rel="next"/.test(html);
 
 	return { listings, nextPage };
+}
+
+export interface FinnDetails {
+	district: string | null;
+	bedrooms: number | null;
+	rooms: number | null;
+	floor: number | null;
+	constructionYear: number | null;
+	viewings: Viewing[];
+}
+
+// The detail page embeds an ad-targeting array of `{"key":"bedrooms","value":["3"]}` entries —
+// far more stable than the rendered markup, so read the scalar fields from there.
+function targetingValues(html: string): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const m of html.matchAll(/\{"key":"([a-z_]+)","value":\[("[^"]*")/g)) {
+		if (!out.has(m[1])) out.set(m[1], decode(JSON.parse(m[2]) as string));
+	}
+	return out;
+}
+
+function hhmmToMinutes(s: string): number {
+	const [h, m] = s.split(':').map(Number);
+	return h * 60 + m;
+}
+
+// Each viewing block carries an "add to calendar" link with the exact UTC start
+// (`iCalendarFrom=20261005T150000Z`) and the local "17:00 – 18:00" range; the end is derived
+// from the local duration so we don't need to know the Oslo offset.
+function parseViewings(html: string): Viewing[] {
+	const viewings: Viewing[] = [];
+	for (const block of html.split('data-testid="viewings-').slice(1)) {
+		const chunk = block.slice(0, 2000);
+		const hrefMatch = chunk.match(
+			/href="(\/realestate\/calendar\.ics\?[^"]*iCalendarFrom=(\d{8}T\d{6}Z)[^"]*)"/
+		);
+		if (!hrefMatch) continue; // e.g. "etter avtale" — no fixed time
+		const c = hrefMatch[2];
+		const start = new Date(
+			`${c.slice(0, 4)}-${c.slice(4, 6)}-${c.slice(6, 8)}T${c.slice(9, 11)}:${c.slice(11, 13)}:${c.slice(13, 15)}Z`
+		);
+		if (isNaN(start.getTime())) continue;
+
+		let end: string | null = null;
+		const text = chunk.replace(/<!--.*?-->/g, '').replace(/<[^>]*>/g, ' ');
+		const range = text.match(/(\d{1,2}:\d{2})\s*[–-]\s*(\d{1,2}:\d{2})/);
+		if (range) {
+			let mins = hhmmToMinutes(range[2]) - hhmmToMinutes(range[1]);
+			if (mins <= 0) mins += 24 * 60;
+			end = new Date(start.getTime() + mins * 60_000).toISOString();
+		}
+		// The block is rendered twice (mobile + desktop layout)
+		if (viewings.some((v) => v.start === start.toISOString())) continue;
+		viewings.push({
+			start: start.toISOString(),
+			end,
+			calendarUrl: `https://www.finn.no${decode(hrefMatch[1])}`
+		});
+	}
+	return viewings;
+}
+
+// Oslo bydel names keyed by Finn's sub-area code (e.g. "20511" → "Grünerløkka - Sofienberg").
+// The search page's location filter embeds them as `"Name","1.20061.20511"` (JSON-escaped).
+const osloDistricts = new Map<string, string>();
+
+function learnOsloDistricts(html: string): void {
+	for (const m of html.matchAll(/\\?"([^"\\]{2,60})\\?",\\?"1\.20061\.(\d+)\\?"/g)) {
+		osloDistricts.set(m[2], decode(m[1]));
+	}
+	if (osloDistricts.size === 0) console.warn('Found no Oslo districts on the search page');
+}
+
+// The ad's own `local_area_name` is free text from the broker ("Bo midt på Majorstuen", often
+// missing), useless for grouping. Use Finn's bydel for Oslo; Bærum has no sub-areas on Finn.
+function districtOf(kv: Map<string, string>): string | null {
+	if (kv.get('municipality') === '20045') return 'Bærum';
+	const sub = kv.get('sub_area');
+	return (sub && osloDistricts.get(sub)) || null;
+}
+
+/** Fetch an ad's detail page. Returns null when the ad is gone (404/410). */
+export async function fetchDetails(url: string): Promise<FinnDetails | null> {
+	const res = await fetch(url, {
+		headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' }
+	});
+	if (res.status === 404 || res.status === 410) return null;
+	if (!res.ok) throw new Error(`Finn ad ${url} failed: ${res.status} ${res.statusText}`);
+	const html = await res.text();
+
+	const kv = targetingValues(html);
+	// Project (new-build) pages lack the targeting array but render the same key-facts list:
+	// <div data-testid="info-bedrooms"><dt>Soverom</dt><dd …>2</dd></div>
+	const num = (key: string, testId: string) =>
+		parseInt(kv.get(key)) ??
+		parseInt(
+			html.match(
+				new RegExp(`data-testid="info-${testId}"[^>]*>\\s*<dt[^>]*>[^<]*</dt>\\s*<dd[^>]*>([^<]*)<`)
+			)?.[1]
+		);
+	return {
+		district: districtOf(kv),
+		bedrooms: num('bedrooms', 'bedrooms'),
+		rooms: num('rooms', 'rooms'),
+		floor: num('floor', 'floor'),
+		constructionYear: num('construction_year', 'construction-year'),
+		viewings: parseViewings(html)
+	};
 }
 
 export async function fetchAllListings(maxPages = 50): Promise<FinnListing[]> {
