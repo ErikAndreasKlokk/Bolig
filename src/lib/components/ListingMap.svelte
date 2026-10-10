@@ -24,7 +24,7 @@
 		$props();
 
 	// Verkstedveien 1, Skøyen — same point Entur routes to (see server/entur.ts)
-	const WORK: [number, number] = [59.92152, 10.69847];
+	const WORK: [number, number] = [59.92126, 10.68594];
 
 	const BUCKETS = [
 		{ max: 20, color: '#16a34a', label: '≤ 20 min' },

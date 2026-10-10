@@ -6,7 +6,7 @@ const GEOCODER_URL = 'https://api.entur.io/geocoder/v1/search';
 const CLIENT_NAME = 'erikak-bolig';
 
 // Verkstedveien 1, 0277 Oslo (Skøyen)
-const WORK = { latitude: 59.92152, longitude: 10.69847 };
+const WORK = { latitude: 59.92126, longitude: 10.68594 };
 
 const TRIP_QUERY = `
 query Trip($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $dateTime: DateTime!) {

@@ -101,6 +101,30 @@
 		);
 	});
 
+	// Rendering all ~900 cards at once made the page several MB of HTML and slow to hydrate,
+	// so render a batch at a time and grow it as the user scrolls toward the end.
+	const PAGE_SIZE = 40;
+	let shown = $state(PAGE_SIZE);
+	const visibleListings = $derived(data.listings.slice(0, shown));
+
+	// New filters/sort start from the top again; form actions (favorite, hide…) keep the URL
+	// and therefore keep how far you've scrolled.
+	$effect(() => {
+		void page.url.search;
+		shown = PAGE_SIZE;
+	});
+
+	function loadMoreOnVisible(node: HTMLElement) {
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((e) => e.isIntersecting)) shown += PAGE_SIZE;
+			},
+			{ rootMargin: '1200px 0px' }
+		);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}
+
 	const f = $derived(data.filters);
 	const activeFilterCount = $derived(
 		Object.values(f).filter((v) => v !== null).length +
@@ -354,7 +378,7 @@
 		{/if}
 
 		<ul class="space-y-4">
-			{#each data.listings as l (l.finnkode)}
+			{#each visibleListings as l (l.finnkode)}
 				<li
 					id="l-{l.finnkode}"
 					class="flex scroll-mt-4 flex-col gap-3 rounded-xl border bg-white p-3 shadow-sm transition sm:flex-row sm:gap-4 sm:p-4 sm:hover:shadow-md
@@ -590,6 +614,21 @@
 				</li>
 			{/each}
 		</ul>
+
+		{#if shown < data.listings.length}
+			<!-- The observer adds batches automatically; the button is a fallback -->
+			{#key shown}
+				<div {@attach loadMoreOnVisible} class="mt-6 text-center">
+					<button
+						type="button"
+						onclick={() => (shown += PAGE_SIZE)}
+						class="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50"
+					>
+						Vis flere ({data.listings.length - shown} igjen)
+					</button>
+				</div>
+			{/key}
+		{/if}
 	{/if}
 </div>
 
