@@ -84,14 +84,13 @@ function parseInt(s: string | undefined): number | null {
 }
 
 function extractCard(html: string): FinnListing | null {
-	const idMatch = html.match(/aria-owns="search-ad-(\d+)"/);
+	// Finn appends a React id to it: aria-owns="search-ad-478301265-_R_597rb5_"
+	const idMatch = html.match(/aria-owns="search-ad-(\d+)/);
 	if (!idMatch) return null;
 	const finnkode = idMatch[1];
 
-	// Heading: <h2 ... sf-realestate-heading...><a ...>TEXT</a></h2>
-	const headingMatch = html.match(
-		/<h2[^>]*sf-realestate-heading[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a><\/h2>/
-	);
+	// Heading: <h2 ... sf-realestate-heading...>TEXT</h2> (older markup wrapped TEXT in an <a>)
+	const headingMatch = html.match(/<h2[^>]*sf-realestate-heading[^>]*>([\s\S]*?)<\/h2>/);
 	const heading = headingMatch
 		? decode(headingMatch[1].replace(/<[^>]*>/g, '').trim())
 		: '(uten tittel)';
@@ -179,6 +178,9 @@ async function fetchPage(page: number): Promise<{ listings: FinnListing[]; nextP
 	const listings = cards
 		.map((c) => extractCard('<article class="sf-search-ad"' + c))
 		.filter((l): l is FinnListing => l !== null);
+	// Cards present but none parsed means Finn changed its markup — say so instead of "0 listings"
+	if (cards.length > 0 && listings.length === 0)
+		console.warn(`Found ${cards.length} ad cards on page ${page} but could not parse any`);
 
 	// Next-page indicator. Finn's pagination link is HTML-entity-encoded (`&amp;page=N`) and
 	// tagged rel="next", so the old `&page=N`/`?page=N` checks never matched — we only ever
@@ -291,8 +293,14 @@ function targetingArray(html: string, key: string): string | undefined {
 // far more stable than the rendered markup, so read the scalar fields from there.
 function targetingValues(html: string): Map<string, string> {
 	const out = new Map<string, string>();
-	for (const m of html.matchAll(/\{"key":"([a-z_]+)","value":\[("[^"]*")/g)) {
-		if (!out.has(m[1])) out.set(m[1], decode(JSON.parse(m[2]) as string));
+	// Values can contain escaped quotes (`"Flaen - \"Nordre\""`), so match JSON string escapes
+	for (const m of html.matchAll(/\{"key":"([a-z_]+)","value":\[("(?:[^"\\]|\\.)*")/g)) {
+		if (out.has(m[1])) continue;
+		try {
+			out.set(m[1], decode(JSON.parse(m[2]) as string));
+		} catch {
+			// One malformed value shouldn't sink the whole ad
+		}
 	}
 	return out;
 }
