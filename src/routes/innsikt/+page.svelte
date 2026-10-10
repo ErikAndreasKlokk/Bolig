@@ -17,6 +17,52 @@
 		if (c === null || c === 0) return 'text-gray-400';
 		return c < 0 ? 'text-green-700' : 'text-red-700';
 	}
+
+	type District = (typeof data.districts)[number];
+	type SortKey = Exclude<keyof District, 'name'> | 'name';
+	const COLUMNS: { key: SortKey; label: () => string }[] = [
+		{ key: 'name', label: () => 'Område' },
+		{ key: 'active', label: () => 'Aktive' },
+		{ key: 'removed', label: () => `Borte (${data.recentDays} d)` },
+		{ key: 'medianDays', label: () => 'Median dager' },
+		{ key: 'medianPpmActive', label: () => 'Kr/m² aktive' },
+		{ key: 'medianPpmRemoved', label: () => 'Kr/m² borte' },
+		{ key: 'dropShare', label: () => 'Med prisfall' }
+	];
+
+	// Server order (most listings first) until a column header is clicked
+	let sortKey: SortKey | null = $state(null);
+	let sortDesc = $state(true);
+
+	function sortBy(key: SortKey) {
+		if (sortKey === key) sortDesc = !sortDesc;
+		else {
+			sortKey = key;
+			// Names read naturally A→Z; numbers are most interesting biggest-first
+			sortDesc = key !== 'name';
+		}
+	}
+
+	const districts = $derived.by(() => {
+		const k = sortKey;
+		if (!k) return data.districts;
+		const dir = sortDesc ? -1 : 1;
+		return [...data.districts].sort((a, b) => {
+			const va = a[k];
+			const vb = b[k];
+			// Unknown values last regardless of direction
+			if (va === null) return vb === null ? 0 : 1;
+			if (vb === null) return -1;
+			if (typeof va === 'string') return dir * va.localeCompare(vb as string, 'nb');
+			return dir * ((va as number) - (vb as number));
+		});
+	});
+
+	// Bars scale against the most expensive area, so cheap and pricey areas stand out
+	const maxPpm = $derived(
+		Math.max(1, ...data.districts.flatMap((d) => [d.medianPpmActive ?? 0, d.medianPpmRemoved ?? 0]))
+	);
+	const barWidth = (v: number | null) => (v === null ? '0%' : `${(v / maxPpm) * 100}%`);
 </script>
 
 <svelte:head>
@@ -50,28 +96,57 @@
 			<table class="w-full text-sm">
 				<thead class="bg-gray-50 text-left text-xs text-gray-500">
 					<tr>
-						<th class="px-3 py-2 font-medium">Område</th>
-						<th class="px-3 py-2 text-right font-medium">Aktive</th>
-						<th class="px-3 py-2 text-right font-medium">Borte ({data.recentDays} d)</th>
-						<th class="px-3 py-2 text-right font-medium">Median dager</th>
-						<th class="px-3 py-2 text-right font-medium">Kr/m² aktive</th>
-						<th class="px-3 py-2 text-right font-medium">Kr/m² borte</th>
-						<th class="px-3 py-2 text-right font-medium">Med prisfall</th>
+						{#each COLUMNS as c (c.key)}
+							<th
+								class="px-3 py-2 font-medium {c.key === 'name' ? '' : 'text-right'}"
+								aria-sort={sortKey === c.key ? (sortDesc ? 'descending' : 'ascending') : 'none'}
+							>
+								<button
+									type="button"
+									onclick={() => sortBy(c.key)}
+									class="inline-flex cursor-pointer items-center gap-1 whitespace-nowrap hover:text-gray-900 {sortKey ===
+									c.key
+										? 'text-gray-900'
+										: ''}"
+								>
+									{c.label()}
+									<span class="w-2 text-[10px]"
+										>{sortKey === c.key ? (sortDesc ? '▼' : '▲') : ''}</span
+									>
+								</button>
+							</th>
+						{/each}
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-gray-100 tabular-nums">
-					{#each data.districts as d (d.name)}
-						<tr>
+					{#each districts as d (d.name)}
+						<tr class="hover:bg-gray-50">
 							<td class="px-3 py-2">
-								<a href="{resolve('/')}?area={encodeURIComponent(d.name)}" class="hover:underline"
-									>{d.name}</a
-								>
+								{#if d.name === 'Ukjent område'}
+									<span class="text-gray-500">{d.name}</span>
+								{:else}
+									<a
+										href="{resolve('/')}?area={encodeURIComponent(d.name)}"
+										class="text-blue-700 hover:underline">{d.name}</a
+									>
+								{/if}
 							</td>
 							<td class="px-3 py-2 text-right">{d.active}</td>
 							<td class="px-3 py-2 text-right">{d.removed}</td>
 							<td class="px-3 py-2 text-right">{nf(d.medianDays)}</td>
-							<td class="px-3 py-2 text-right">{nf(d.medianPpmActive)}</td>
-							<td class="px-3 py-2 text-right">{nf(d.medianPpmRemoved)}</td>
+							{#each [d.medianPpmActive, d.medianPpmRemoved] as v, i (i)}
+								<td class="min-w-32 px-3 py-2 text-right">
+									<div class="relative">
+										<div
+											class="absolute inset-y-0 right-0 rounded {i === 0
+												? 'bg-blue-100'
+												: 'bg-gray-100'}"
+											style="width:{barWidth(v)}"
+										></div>
+										<span class="relative px-1">{nf(v)}</span>
+									</div>
+								</td>
+							{/each}
 							<td class="px-3 py-2 text-right">{Math.round(d.dropShare * 100)}%</td>
 						</tr>
 					{/each}

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import 'leaflet/dist/leaflet.css';
-	import type { Map as LeafletMap } from 'leaflet';
+	import type { CircleMarker, Map as LeafletMap } from 'leaflet';
 
 	interface MapListing {
 		finnkode: string;
@@ -20,8 +20,18 @@
 		active: boolean;
 	}
 
-	let { listings, onopen }: { listings: MapListing[]; onopen?: (finnkode: string) => void } =
-		$props();
+	let {
+		listings,
+		highlight = null,
+		onopen,
+		heightClass = 'h-[70vh] min-h-[400px]'
+	}: {
+		listings: MapListing[];
+		/** finnkode of the listing to emphasise (e.g. the card under the mouse) */
+		highlight?: string | null;
+		onopen?: (finnkode: string) => void;
+		heightClass?: string;
+	} = $props();
 
 	// Verkstedveien 1, Skøyen — same point Entur routes to (see server/entur.ts)
 	const WORK: [number, number] = [59.92126, 10.68594];
@@ -46,53 +56,85 @@
 		);
 	}
 
-	function popupHtml(l: MapListing): string {
+	// Hover preview — clicking the marker opens the full listing dialog
+	function tooltipHtml(l: MapListing): string {
 		const price = l.priceTotal ?? l.priceSuggestion;
 		const facts = [
 			price !== null ? `${price.toLocaleString('no-NO')} kr` : null,
 			l.sizeM2 ? `${l.sizeM2} m²` : null,
-			l.pricePerM2 ? `${l.pricePerM2.toLocaleString('no-NO')} kr/m²` : null,
 			l.travelMinutes !== null ? `🚇 ${l.travelMinutes} min` : null
 		].filter(Boolean);
 		return `
-			<div style="width:220px">
+			<div style="width:220px;white-space:normal">
 				${l.imageUrl ? `<img src="${esc(l.imageUrl)}" alt="" style="width:100%;height:110px;object-fit:cover;border-radius:6px;margin-bottom:6px">` : ''}
-				<a href="${esc(l.url)}" data-open="${esc(l.finnkode)}" style="font-weight:600;cursor:pointer">${l.favorite ? '★ ' : ''}${esc(l.heading)}</a>
+				<div style="font-weight:600">${l.favorite ? '★ ' : ''}${esc(l.heading)}</div>
 				<div style="color:#6b7280;margin-top:2px">${esc(l.address ?? '')}</div>
 				<div style="margin-top:4px">${facts.join(' · ')}</div>
-				<div style="margin-top:6px;display:flex;gap:12px">
-					<a href="#" data-open="${esc(l.finnkode)}">Vis detaljer</a>
-					<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">Finn ↗</a>
-				</div>
 			</div>`;
 	}
+
+	function baseStyle(l: MapListing) {
+		return {
+			radius: l.favorite ? 9 : 7,
+			color: l.favorite ? '#f59e0b' : '#ffffff',
+			weight: l.favorite ? 3 : 1.5,
+			fillColor: colorFor(l.travelMinutes),
+			fillOpacity: l.active ? 0.9 : 0.35
+		};
+	}
+	const HIGHLIGHT_STYLE = { radius: 12, color: '#1d4ed8', weight: 4, fillOpacity: 1 };
 
 	let container: HTMLDivElement;
 	let map: LeafletMap | undefined;
 	let L: typeof import('leaflet') | undefined;
 	let layer: import('leaflet').LayerGroup | undefined;
+	// Plain registries (never rendered), rebuilt on every draw
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity
+	const markers = new Map<string, { marker: CircleMarker; listing: MapListing }>();
+	let highlighted: string | null = null;
+	// Only re-fit the view when the *set* of listings changes (new filters), not when a
+	// favorite/status change reloads the same listings
+	let fittedKey = '';
+
+	function applyHighlight(key: string | null) {
+		const prev = highlighted ? markers.get(highlighted) : undefined;
+		if (prev) {
+			prev.marker.setStyle(baseStyle(prev.listing));
+			prev.marker.closeTooltip();
+		}
+		highlighted = key;
+		const next = key ? markers.get(key) : undefined;
+		if (next) {
+			next.marker.setStyle(HIGHLIGHT_STYLE).bringToFront().openTooltip();
+		}
+	}
 
 	function draw() {
 		if (!map || !L || !layer) return;
 		layer.clearLayers();
+		markers.clear();
+		highlighted = null;
 		const points: [number, number][] = [WORK];
 		// Draw favorites last so they sit on top
 		const sorted = [...listings].sort((a, b) => Number(a.favorite) - Number(b.favorite));
 		for (const l of sorted) {
 			if (l.lat === null || l.lon === null) continue;
 			points.push([l.lat, l.lon]);
-			L.circleMarker([l.lat, l.lon], {
-				radius: l.favorite ? 9 : 7,
-				color: l.favorite ? '#f59e0b' : '#ffffff',
-				weight: l.favorite ? 3 : 1.5,
-				fillColor: colorFor(l.travelMinutes),
-				fillOpacity: l.active ? 0.9 : 0.35
-			})
-				.bindPopup(popupHtml(l))
+			const marker = L.circleMarker([l.lat, l.lon], baseStyle(l))
+				.bindTooltip(tooltipHtml(l), { direction: 'top', offset: [0, -8] })
+				.on('click', () => onopen?.(l.finnkode))
 				.addTo(layer);
+			markers.set(l.finnkode, { marker, listing: l });
 		}
-		if (points.length > 1)
+		const key = listings
+			.map((l) => l.finnkode)
+			.sort()
+			.join(',');
+		if (key !== fittedKey && points.length > 1) {
+			fittedKey = key;
 			map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 14 });
+		}
+		applyHighlight(untrack(() => highlight));
 	}
 
 	onMount(() => {
@@ -125,23 +167,15 @@
 		draw();
 	});
 
+	$effect(() => {
+		applyHighlight(highlight);
+	});
+
 	const missing = $derived(listings.filter((l) => l.lat === null || l.lon === null).length);
 </script>
 
 <div class="overflow-hidden rounded-xl border border-gray-200">
-	<!-- Popups are Leaflet HTML strings, so catch their "open drawer" links by delegation -->
-	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-	<div
-		bind:this={container}
-		class="h-[70vh] min-h-[400px] w-full"
-		onclick={(e) => {
-			const link = (e.target as HTMLElement).closest<HTMLElement>('[data-open]');
-			if (link && onopen) {
-				e.preventDefault();
-				onopen(link.dataset.open!);
-			}
-		}}
-	></div>
+	<div bind:this={container} class="{heightClass} w-full"></div>
 </div>
 <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600">
 	{#each BUCKETS as b (b.label)}

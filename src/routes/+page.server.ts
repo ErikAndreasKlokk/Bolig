@@ -145,7 +145,8 @@ export const load: PageServerLoad = async ({ url }) => {
 	// Price history (effective price = totalpris, else prisantydning) per listing, oldest first
 	const keys = filtered.map((l) => l.finnkode);
 	const historyByKey = new Map<string, number[]>();
-	if (keys.length > 0 && view === 'liste') {
+	// Wide screens show the list next to the map, so this is needed in both views
+	if (keys.length > 0) {
 		const hist = await db
 			.select({
 				finnkode: priceHistory.finnkode,
