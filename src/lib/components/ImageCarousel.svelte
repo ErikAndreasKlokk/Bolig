@@ -42,11 +42,12 @@
 </script>
 
 {#if images.length > 0}
-	<div class="relative bg-gray-900">
+	<!-- lg: fills the drawer's gallery column (a flex column) rather than a fixed 4:3 box -->
+	<div class="relative bg-gray-900 lg:min-h-0 lg:flex-1">
 		<div
 			bind:this={track}
 			onscroll={onScroll}
-			class="flex aspect-[4/3] snap-x snap-mandatory [scrollbar-width:none] overflow-x-auto [&::-webkit-scrollbar]:hidden"
+			class="flex aspect-[4/3] snap-x snap-mandatory [scrollbar-width:none] overflow-x-auto lg:aspect-auto lg:h-full [&::-webkit-scrollbar]:hidden"
 		>
 			{#each images as img, i (img.url)}
 				<div class="h-full w-full shrink-0 snap-center">

@@ -127,8 +127,9 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- Above Leaflet's panes/controls (z-index up to 1000) -->
-<div class="fixed inset-0 z-[2000] flex justify-end">
+<!-- Above Leaflet's panes/controls (z-index up to 1000). Phones/tablets get a side drawer; on
+     desktop it's a large centered dialog with photos left and details right. -->
+<div class="fixed inset-0 z-[2000] flex justify-end lg:items-center lg:justify-center lg:p-6">
 	<button
 		type="button"
 		class="absolute inset-0 cursor-default bg-black/40"
@@ -143,7 +144,7 @@
 		aria-modal="true"
 		aria-label={listing.heading}
 		tabindex="-1"
-		class="relative flex h-full w-full flex-col bg-white shadow-2xl outline-none sm:max-w-2xl"
+		class="relative flex h-full w-full flex-col bg-white shadow-2xl outline-none sm:max-w-2xl lg:h-[min(92vh,1000px)] lg:max-w-[1400px] lg:overflow-hidden lg:rounded-2xl"
 	>
 		<div
 			class="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-5"
@@ -159,22 +160,29 @@
 			>
 		</div>
 
-		<div class="flex-1 overflow-y-auto overscroll-contain">
-			{#if detail && detail.images.length > 0}
-				<ImageCarousel bind:this={carousel} images={detail.images} />
-			{:else if listing.imageUrl}
-				<div class="relative aspect-[4/3] bg-gray-900">
-					<img src={listing.imageUrl} alt="" class="h-full w-full object-contain opacity-80" />
-					{#if !detail && !loadError}
-						<span
-							class="absolute right-2 bottom-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
-							>Henter bilder…</span
-						>
-					{/if}
-				</div>
-			{/if}
+		<div
+			class="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:overflow-hidden"
+		>
+			<!-- On desktop the gallery fills the left column's height instead of a fixed 4:3 box -->
+			<div class="lg:flex lg:min-h-0 lg:flex-col">
+				{#if detail && detail.images.length > 0}
+					<ImageCarousel bind:this={carousel} images={detail.images} />
+				{:else if listing.imageUrl}
+					<div class="relative aspect-[4/3] bg-gray-900 lg:aspect-auto lg:min-h-0 lg:flex-1">
+						<img src={listing.imageUrl} alt="" class="h-full w-full object-contain opacity-80" />
+						{#if !detail && !loadError}
+							<span
+								class="absolute right-2 bottom-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
+								>Henter bilder…</span
+							>
+						{/if}
+					</div>
+				{/if}
+			</div>
 
-			<div class="space-y-6 px-4 pt-3 pb-8 sm:px-5">
+			<div
+				class="space-y-6 px-4 pt-3 pb-8 sm:px-5 lg:overflow-y-auto lg:overscroll-contain lg:border-l lg:border-gray-100 lg:pt-5"
+			>
 				<section>
 					<div class="flex items-start justify-between gap-3">
 						<h2 class="text-lg leading-snug font-semibold">{listing.heading}</h2>
@@ -312,7 +320,7 @@
 					{#if detail.facts.length > 0}
 						<section>
 							<h3 class="mb-2 text-sm font-semibold text-gray-800">Nøkkelinfo</h3>
-							<dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+							<dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3 lg:grid-cols-2">
 								{#each detail.facts as f (f.label)}
 									<div>
 										<dt class="text-xs text-gray-500">{f.label}</dt>
