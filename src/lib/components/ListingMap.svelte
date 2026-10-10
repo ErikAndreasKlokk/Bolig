@@ -95,6 +95,9 @@
 	// Only re-fit the view when the *set* of listings changes (new filters), not when a
 	// favorite/status change reloads the same listings
 	let fittedKey = '';
+	let fittedBounds: import('leaflet').LatLngBounds | undefined;
+	// Once the user pans/zooms, stop re-fitting on container resizes
+	let userMoved = false;
 
 	function applyHighlight(key: string | null) {
 		const prev = highlighted ? markers.get(highlighted) : undefined;
@@ -132,7 +135,9 @@
 			.join(',');
 		if (key !== fittedKey && points.length > 1) {
 			fittedKey = key;
-			map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 14 });
+			fittedBounds = L.latLngBounds(points);
+			userMoved = false;
+			map.fitBounds(fittedBounds, { padding: [30, 30], maxZoom: 14 });
 		}
 		applyHighlight(untrack(() => highlight));
 	}
@@ -153,10 +158,26 @@
 				.bindTooltip('Jobb — Verkstedveien 1')
 				.addTo(map);
 			layer = L.layerGroup().addTo(map);
+			map.on('dragstart', () => (userMoved = true));
+			container.addEventListener('wheel', () => (userMoved = true), { passive: true });
+			container
+				.querySelector('.leaflet-control-zoom')
+				?.addEventListener('click', () => (userMoved = true));
 			draw();
 		})();
+		// Leaflet measures its container once; in the split layout the column settles after
+		// mount (and changes with the window), which left grey untiled strips and a fit computed
+		// for the wrong size
+		const resize = new ResizeObserver(() => {
+			if (!map) return;
+			map.invalidateSize();
+			if (fittedBounds && !userMoved)
+				map.fitBounds(fittedBounds, { padding: [30, 30], maxZoom: 14 });
+		});
+		resize.observe(container);
 		return () => {
 			cancelled = true;
+			resize.disconnect();
 			map?.remove();
 		};
 	});
