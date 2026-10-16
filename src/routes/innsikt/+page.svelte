@@ -154,10 +154,10 @@
 			</table>
 		</div>
 		<p class="mt-2 text-xs text-gray-400">
-			«Borte» betyr at annonsen forsvant fra søket — oftest solgt, men kan også være trukket eller
-			prisjustert ut av 3–5 mill. Boliger som lå ute før skraperen startet er holdt utenfor median
-			dager (vi vet ikke når de ble lagt ut). Område hentes fra annonsen, så eldre boliger kan stå
-			som «Ukjent område» til detaljene er hentet.
+			Tallene gjelder boligene ditt eget søk har funnet. «Borte» betyr at annonsen forsvant fra Finn
+			— oftest solgt, men kan også være trukket eller prisjustert ut av søket. Boliger som lå ute
+			før søket ditt startet er holdt utenfor median dager (vi vet ikke når de ble lagt ut). Område
+			hentes fra annonsen, så nye boliger kan stå med poststed til detaljene er hentet.
 		</p>
 	</section>
 

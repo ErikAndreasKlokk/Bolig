@@ -1,6 +1,19 @@
 import { env } from '$env/dynamic/private';
 import type { Listing } from './db/schema';
 import { areaOf, formatViewing, upcomingViewings } from '$lib/listing';
+import type { User } from '$lib/users';
+
+/**
+ * Each user's own channel: DISCORD_WEBHOOK_URL_<KEY> (e.g. DISCORD_WEBHOOK_URL_RUNAR). Erik's is
+ * the original DISCORD_WEBHOOK_URL. No webhook = no notifications for that user.
+ */
+export function webhookFor(user: User): string | undefined {
+	return (
+		env[`DISCORD_WEBHOOK_URL_${user.key.toUpperCase()}`] ||
+		(user.key === 'erik' ? env.DISCORD_WEBHOOK_URL : undefined) ||
+		undefined
+	);
+}
 
 function formatPrice(n: number | null): string {
 	return n === null ? '?' : `${n.toLocaleString('no-NO')} kr`;
@@ -16,13 +29,8 @@ function nextViewingField(l: Listing): { name: string; value: string; inline: bo
 	return [{ name: 'Neste visning', value: formatViewing(next), inline: false }];
 }
 
-export async function notifyNewListings(listings: Listing[]): Promise<void> {
-	const webhookUrl = env.DISCORD_WEBHOOK_URL;
-	if (!webhookUrl) {
-		console.warn('DISCORD_WEBHOOK_URL not set — skipping Discord notification');
-		return;
-	}
-
+// `travelMinutes` is the receiving user's own (listing_matches), not the legacy listings column
+export async function notifyNewListings(webhookUrl: string, listings: Listing[]): Promise<void> {
 	// Discord allows max 10 embeds per message
 	for (let i = 0; i < listings.length; i += 10) {
 		const batch = listings.slice(i, i + 10);
@@ -67,13 +75,7 @@ export interface PriceDrop {
 	newPrice: number;
 }
 
-export async function notifyPriceDrops(drops: PriceDrop[]): Promise<void> {
-	const webhookUrl = env.DISCORD_WEBHOOK_URL;
-	if (!webhookUrl) {
-		console.warn('DISCORD_WEBHOOK_URL not set — skipping Discord notification');
-		return;
-	}
-
+export async function notifyPriceDrops(webhookUrl: string, drops: PriceDrop[]): Promise<void> {
 	// Discord allows max 10 embeds per message
 	for (let i = 0; i < drops.length; i += 10) {
 		const batch = drops.slice(i, i + 10);

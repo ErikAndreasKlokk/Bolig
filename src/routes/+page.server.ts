@@ -1,7 +1,8 @@
-import { eq, asc, and, or, inArray, getTableColumns, sql, type SQL } from 'drizzle-orm';
+import { eq, asc, and, or, inArray, isNotNull, getTableColumns, sql, type SQL } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { listings, listingUserState, priceHistory } from '$lib/server/db/schema';
+import { listingMatches, listings, listingUserState, priceHistory } from '$lib/server/db/schema';
+import { describeSearch, TRAVEL_MODES } from '$lib/search';
 import { getSettings } from '$lib/server/settings';
 import { requireUser } from '$lib/server/auth';
 import { setListingState, type ListingStatePatch } from '$lib/server/userState';
@@ -55,18 +56,21 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	// The logged-in user's own tracking; no row means untouched
 	const favorite = sql<boolean>`coalesce(${listingUserState.favorite}, false)`;
 	const hidden = sql<boolean>`coalesce(${listingUserState.hidden}, false)`;
+	// "Active" for you = still returned by *your* search (gone = sold, or now outside your criteria)
+	const active = sql<boolean>`coalesce(${listingMatches.active}, false)`;
 
-	const conditions: SQL[] = [];
+	// Only listings your own search has found…
+	const conditions: SQL[] = [isNotNull(listingMatches.userId)];
 	if (!showHidden) conditions.push(sql`not ${hidden}`);
-	if (!showInactive) conditions.push(eq(listings.active, true));
+	if (!showInactive) conditions.push(active);
 
-	// Favorites stay pinned even after they go inactive (sold / dropped off Finn) or get
+	// …but favorites stay pinned even after they go inactive (sold / dropped off Finn) or get
 	// hidden, so a listing you starred doesn't silently vanish the next day.
-	const visibility = conditions.length > 0 ? or(favorite, and(...conditions)) : undefined;
+	const visibility = or(favorite, and(...conditions));
 
 	// Images, facts and description are only needed in the drawer, which loads them on demand
 	// (/api/listing/[finnkode]) — leave them out of this ~900-row query. The legacy single-user
-	// tracking columns are replaced by the joined per-user ones.
+	// columns are replaced by the joined per-user ones.
 	/* eslint-disable @typescript-eslint/no-unused-vars -- destructured only to leave them out */
 	const {
 		images: _images,
@@ -77,12 +81,23 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		hidden: _hidden,
 		status: _status,
 		note: _note,
+		travelMinutes: _travelMinutes,
+		notifiedAt: _notifiedAt,
+		active: _active,
+		firstSeenAt: _firstSeenAt,
 		...cardColumns
 	} = getTableColumns(listings);
 	/* eslint-enable @typescript-eslint/no-unused-vars */
 	const rows = await db
 		.select({
 			...cardColumns,
+			active,
+			// When it showed up in your search, for "Nyeste"
+			firstSeenAt:
+				sql<Date>`coalesce(${listingMatches.firstSeenAt}, ${listings.firstSeenAt})`.mapWith(
+					listings.firstSeenAt
+				),
+			travelMinutes: listingMatches.travelMinutes,
 			favorite,
 			hidden,
 			status: listingUserState.status,
@@ -92,6 +107,10 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		.leftJoin(
 			listingUserState,
 			and(eq(listingUserState.finnkode, listings.finnkode), eq(listingUserState.userId, user.id))
+		)
+		.leftJoin(
+			listingMatches,
+			and(eq(listingMatches.finnkode, listings.finnkode), eq(listingMatches.userId, user.id))
 		)
 		.where(visibility);
 	const settings = await getSettings(user.id);
@@ -195,6 +214,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 	return {
 		user: { key: user.key, name: user.name },
+		searchSummary: describeSearch(settings),
+		hasSearch: settings.searchLocations.length > 0,
+		travelSummary: settings.workAddress
+			? `${TRAVEL_MODES[settings.travelMode].toLowerCase()} til ${settings.workAddress}`
+			: null,
 		listings: withHistory,
 		settings,
 		showHidden,

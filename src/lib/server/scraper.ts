@@ -1,36 +1,153 @@
-import { eq, notInArray, isNull, and, or, lt, gt, inArray, desc, not, sql } from 'drizzle-orm';
+import {
+	eq,
+	isNull,
+	isNotNull,
+	and,
+	or,
+	lt,
+	gt,
+	inArray,
+	notInArray,
+	desc,
+	not,
+	sql
+} from 'drizzle-orm';
 import { db } from './db';
-import { listings, listingUserState, priceHistory, type Listing } from './db/schema';
-import { USERS } from '$lib/users';
-import { fetchAllListings, fetchDetails } from './finn';
-import { transitMinutesToWork, geocodeAddress } from './entur';
-import { notifyNewListings, notifyPriceDrops, type PriceDrop } from './discord';
+import {
+	listings,
+	listingMatches,
+	listingUserState,
+	priceHistory,
+	userSettings,
+	type Listing,
+	type UserSettings
+} from './db/schema';
+import { USERS, type User } from '$lib/users';
+import { searchKey } from '$lib/search';
+import { fetchAllListings, fetchDetails, type FinnListing } from './finn';
+import { travelMinutes, geocodeAddress } from './entur';
+import { notifyNewListings, notifyPriceDrops, webhookFor, type PriceDrop } from './discord';
 
 let running = false;
 
 // Tracking is per user (listing_user_state). Someone follows a listing if they starred it or
-// gave it a status; it's only uninteresting to the shared Discord feed if *everyone* hid it.
+// gave it a status; it's only uninteresting to everyone if *everyone* hid it.
 const followedBySomeone = sql`exists (select 1 from ${listingUserState} s where s.finnkode = ${listings.finnkode} and (s.favorite or s.status is not null))`;
 const hiddenByEveryone = sql`((select count(*) from ${listingUserState} s where s.finnkode = ${listings.finnkode} and s.hidden) >= ${USERS.length})`;
 
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Asked for while one was running (e.g. someone saved a new search): run once more afterwards
+let rerunQueued = false;
+
 export async function runScrape(): Promise<{ total: number; added: number }> {
 	if (running) {
-		console.log('Scrape already running — skipping');
+		console.log('Scrape already running — queued another run after it');
+		rerunQueued = true;
 		return { total: 0, added: 0 };
 	}
 	running = true;
 	try {
-		return await doScrape();
+		let result = await doScrape();
+		while (rerunQueued) {
+			rerunQueued = false;
+			result = await doScrape();
+		}
+		return result;
 	} finally {
 		running = false;
 	}
 }
 
+interface UserRun {
+	user: User;
+	settings: UserSettings;
+	/** finnkodes this user's search returned; null when the search failed (leave matches alone) */
+	keys: Set<string> | null;
+}
+
 async function doScrape(): Promise<{ total: number; added: number }> {
 	console.log('Scrape started');
-	const fetched = await fetchAllListings();
-	console.log(`Fetched ${fetched.length} listings from Finn`);
+	const now = new Date();
 
+	// 1. Run each user's own Finn search — once per distinct search, since several users may
+	//    have identical criteria
+	const settingsRows = await db.select().from(userSettings);
+	const settingsById = new Map(settingsRows.map((s) => [s.id, s]));
+	const resultsBySearch = new Map<string, FinnListing[] | null>();
+	const union = new Map<string, FinnListing>();
+	const runs: UserRun[] = [];
+
+	for (const user of USERS) {
+		const settings = settingsById.get(user.id);
+		if (!settings) continue;
+		if (settings.searchLocations.length === 0) {
+			runs.push({ user, settings, keys: new Set() }); // no search → nothing matches
+			continue;
+		}
+		const key = searchKey(settings);
+		if (!resultsBySearch.has(key)) {
+			try {
+				const found = await fetchAllListings(settings);
+				resultsBySearch.set(key, found);
+				console.log(`Fetched ${found.length} listings from Finn for ${user.name}'s search`);
+			} catch (e) {
+				console.error(`Finn search for ${user.name} failed:`, e);
+				resultsBySearch.set(key, null);
+			}
+		}
+		const found = resultsBySearch.get(key) ?? null;
+		for (const l of found ?? []) union.set(l.finnkode, l);
+		runs.push({ user, settings, keys: found && new Set(found.map((l) => l.finnkode)) });
+	}
+
+	// 2. Upsert the listings themselves (shared by everyone), tracking price changes
+	const { newKeys, dropKeys } = await upsertListings([...union.values()], now);
+
+	// 3. Record which listings each user's search returned
+	for (const run of runs) {
+		if (run.keys) await updateMatches(run.user.id, [...run.keys], now);
+	}
+	// A listing is active while any user's search still returns it
+	await db.execute(sql`
+		update ${listings} set active = exists (
+			select 1 from ${listingMatches} m where m.finnkode = ${listings.finnkode} and m.active
+		)
+	`);
+
+	await geocodeMissing();
+	for (const run of runs) await computeTravel(run.user, run.settings);
+	await enrichDetails(now);
+
+	// 4. Per-user Discord notifications
+	const dropRows =
+		dropKeys.length > 0
+			? await db
+					.select()
+					.from(listings)
+					.where(
+						inArray(
+							listings.finnkode,
+							dropKeys.map((d) => d.finnkode)
+						)
+					)
+			: [];
+	for (const run of runs) {
+		if (run.keys) await notifyUser(run, dropKeys, dropRows, now);
+	}
+
+	console.log(
+		`Scrape done: ${union.size} listings across ${resultsBySearch.size} searches, ${newKeys.length} new, ${dropKeys.length} price drops`
+	);
+	return { total: union.size, added: newKeys.length };
+}
+
+type DropKey = { finnkode: string; oldPrice: number; newPrice: number };
+
+async function upsertListings(
+	fetched: FinnListing[],
+	now: Date
+): Promise<{ newKeys: string[]; dropKeys: DropKey[] }> {
 	const existing = await db
 		.select({
 			finnkode: listings.finnkode,
@@ -39,12 +156,10 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 		})
 		.from(listings);
 	const existingMap = new Map(existing.map((e) => [e.finnkode, e]));
-	const isBootstrap = existingMap.size === 0;
 
-	const now = new Date();
 	const newKeys: string[] = [];
-	// finnkodes whose effective price went down — full rows are fetched after the loop
-	const dropKeys: { finnkode: string; oldPrice: number; newPrice: number }[] = [];
+	// finnkodes whose effective price went down — full rows are fetched later
+	const dropKeys: DropKey[] = [];
 
 	for (const l of fetched) {
 		const prev = existingMap.get(l.finnkode);
@@ -87,8 +202,7 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 					priceSuggestion: newSuggestion,
 					sharedCost: l.sharedCost,
 					imageUrl: l.imageUrl,
-					lastSeenAt: now,
-					active: true
+					lastSeenAt: now
 				})
 				.where(eq(listings.finnkode, l.finnkode));
 		} else {
@@ -103,99 +217,178 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 			newKeys.push(l.finnkode);
 		}
 	}
+	return { newKeys, dropKeys };
+}
 
-	// Listings gone from the search results are sold/withdrawn — mark inactive
-	const fetchedKeys = fetched.map((l) => l.finnkode);
-	if (fetchedKeys.length > 0) {
+// Matches this run's results; the rest of the user's matches dropped out of their search
+// (sold, withdrawn, or no longer within their criteria).
+async function updateMatches(userId: number, keys: string[], now: Date): Promise<void> {
+	for (let i = 0; i < keys.length; i += 500) {
 		await db
-			.update(listings)
-			.set({ active: false })
-			.where(notInArray(listings.finnkode, fetchedKeys));
+			.insert(listingMatches)
+			.values(
+				keys
+					.slice(i, i + 500)
+					.map((finnkode) => ({ userId, finnkode, firstSeenAt: now, lastSeenAt: now }))
+			)
+			.onConflictDoUpdate({
+				target: [listingMatches.userId, listingMatches.finnkode],
+				set: { lastSeenAt: now, active: true }
+			});
 	}
+	await db
+		.update(listingMatches)
+		.set({ active: false })
+		.where(
+			and(
+				eq(listingMatches.userId, userId),
+				eq(listingMatches.active, true),
+				keys.length > 0 ? notInArray(listingMatches.finnkode, keys) : undefined
+			)
+		);
+}
 
-	// Geocode any active listing that has an address but no coordinates yet
-	const missingCoords = await db
-		.select()
+// Coordinates for any active listing that has an address but none yet
+async function geocodeMissing(): Promise<void> {
+	const missing = await db
+		.select({ finnkode: listings.finnkode, address: listings.address })
 		.from(listings)
-		.where(and(isNull(listings.lat), eq(listings.active, true)));
-
-	for (const l of missingCoords) {
-		if (!l.address) continue;
-		const coords = await geocodeAddress(l.address);
+		.where(and(isNull(listings.lat), isNotNull(listings.address), eq(listings.active, true)));
+	for (const l of missing) {
+		const coords = await geocodeAddress(l.address!);
 		if (coords) {
 			await db
 				.update(listings)
 				.set({ lat: coords.lat, lon: coords.lon })
 				.where(eq(listings.finnkode, l.finnkode));
 		}
-		await new Promise((r) => setTimeout(r, 300));
+		await pause(300);
 	}
+}
 
-	// Compute travel time for listings that now have coords but no minutes yet
-	const missingTravel = await db
-		.select()
-		.from(listings)
-		.where(and(isNull(listings.travelMinutes), eq(listings.active, true)));
-
-	for (const l of missingTravel) {
-		if (l.lat === null || l.lon === null) continue;
-		const minutes = await transitMinutesToWork(l.lat, l.lon);
+// Travel time from each of the user's active matches to their work address, by their mode.
+// Saving a new address/mode in settings clears these, so they're recomputed here.
+async function computeTravel(user: User, s: UserSettings): Promise<void> {
+	if (s.workLat === null || s.workLon === null) return;
+	const work = { lat: s.workLat, lon: s.workLon };
+	const due = await db
+		.select({ finnkode: listings.finnkode, lat: listings.lat, lon: listings.lon })
+		.from(listingMatches)
+		.innerJoin(listings, eq(listings.finnkode, listingMatches.finnkode))
+		.where(
+			and(
+				eq(listingMatches.userId, user.id),
+				eq(listingMatches.active, true),
+				isNull(listingMatches.travelMinutes),
+				isNotNull(listings.lat)
+			)
+		);
+	let done = 0;
+	for (const l of due) {
+		const minutes = await travelMinutes({ lat: l.lat!, lon: l.lon! }, work, s.travelMode);
 		if (minutes !== null) {
 			await db
-				.update(listings)
+				.update(listingMatches)
 				.set({ travelMinutes: minutes })
-				.where(eq(listings.finnkode, l.finnkode));
+				.where(and(eq(listingMatches.userId, user.id), eq(listingMatches.finnkode, l.finnkode)));
+			done++;
 		}
-		await new Promise((r) => setTimeout(r, 300));
+		await pause(300);
 	}
+	if (due.length > 0) console.log(`Travel times for ${user.name}: ${done}/${due.length}`);
+}
 
-	await enrichDetails(now);
-
-	// Notify about new listings — but not on the very first run (would spam hundreds)
-	const unnotified = await db.select().from(listings).where(isNull(listings.notifiedAt));
-
-	if (isBootstrap) {
-		console.log(
-			`Bootstrap run — marking ${unnotified.length} listings as notified without sending`
+async function notifyUser(
+	{ user, settings }: UserRun,
+	dropKeys: DropKey[],
+	dropRows: Listing[],
+	now: Date
+): Promise<void> {
+	const fresh = await db
+		.select({ listing: listings, travelMinutes: listingMatches.travelMinutes })
+		.from(listingMatches)
+		.innerJoin(listings, eq(listings.finnkode, listingMatches.finnkode))
+		.where(
+			and(
+				eq(listingMatches.userId, user.id),
+				eq(listingMatches.active, true),
+				isNull(listingMatches.notifiedAt)
+			)
 		);
-		await markNotified(unnotified, now);
-	} else if (unnotified.length > 0) {
-		const sorted = [...unnotified].sort(
-			(a, b) => (a.travelMinutes ?? 999) - (b.travelMinutes ?? 999)
-		);
-		await notifyNewListings(sorted);
-		await markNotified(unnotified, now);
-	}
+	const markNotified = () =>
+		db
+			.update(listingMatches)
+			.set({ notifiedAt: now })
+			.where(and(eq(listingMatches.userId, user.id), isNull(listingMatches.notifiedAt)));
 
-	// Notify about price drops on already-known listings (never on the bootstrap run)
-	if (!isBootstrap && dropKeys.length > 0) {
-		const rows = await db
-			.select()
-			.from(listings)
-			.where(
-				and(
-					inArray(
-						listings.finnkode,
-						dropKeys.map((d) => d.finnkode)
-					),
-					not(hiddenByEveryone)
-				)
+	// First run after the search changed: everything is "new" — file it without posting
+	if (settings.searchPending) {
+		if (fresh.length > 0)
+			console.log(
+				`${user.name}'s search changed — ${fresh.length} matches marked seen, not posted`
 			);
-		const byKey = new Map(rows.map((r) => [r.finnkode, r]));
-		const drops: PriceDrop[] = dropKeys
-			.map((d) => {
-				const listing = byKey.get(d.finnkode);
-				return listing ? { listing, oldPrice: d.oldPrice, newPrice: d.newPrice } : null;
-			})
-			.filter((d): d is PriceDrop => d !== null);
-		if (drops.length > 0) await notifyPriceDrops(drops);
-		console.log(`Notified ${drops.length} price drops`);
+		await markNotified();
+		await db.update(userSettings).set({ searchPending: false }).where(eq(userSettings.id, user.id));
+		return;
 	}
 
-	console.log(
-		`Scrape done: ${fetched.length} total, ${newKeys.length} new, ${dropKeys.length} price drops`
-	);
-	return { total: fetched.length, added: newKeys.length };
+	const webhook = webhookFor(user);
+	if (fresh.length > 0) {
+		// Marked even without a webhook, so adding one later doesn't post the whole backlog
+		if (webhook) {
+			const withTravel = fresh
+				.map((r) => ({ ...r.listing, travelMinutes: r.travelMinutes }))
+				.sort((a, b) => (a.travelMinutes ?? 999) - (b.travelMinutes ?? 999));
+			await notifyNewListings(webhook, withTravel);
+		}
+		await markNotified();
+	}
+
+	if (!webhook || dropKeys.length === 0) return;
+	// Price drops among this user's current matches that they haven't hidden
+	const mine = await db
+		.select({
+			finnkode: listingMatches.finnkode,
+			travelMinutes: listingMatches.travelMinutes,
+			hidden: listingUserState.hidden
+		})
+		.from(listingMatches)
+		.leftJoin(
+			listingUserState,
+			and(
+				eq(listingUserState.userId, listingMatches.userId),
+				eq(listingUserState.finnkode, listingMatches.finnkode)
+			)
+		)
+		.where(
+			and(
+				eq(listingMatches.userId, user.id),
+				eq(listingMatches.active, true),
+				inArray(
+					listingMatches.finnkode,
+					dropKeys.map((d) => d.finnkode)
+				)
+			)
+		);
+	const relevant = new Map(mine.filter((m) => !m.hidden).map((m) => [m.finnkode, m]));
+	const byKey = new Map(dropRows.map((r) => [r.finnkode, r]));
+	const drops: PriceDrop[] = dropKeys.flatMap((d) => {
+		const listing = byKey.get(d.finnkode);
+		const match = relevant.get(d.finnkode);
+		return listing && match
+			? [
+					{
+						listing: { ...listing, travelMinutes: match.travelMinutes },
+						oldPrice: d.oldPrice,
+						newPrice: d.newPrice
+					}
+				]
+			: [];
+	});
+	if (drops.length > 0) {
+		await notifyPriceDrops(webhook, drops);
+		console.log(`Notified ${user.name} of ${drops.length} price drops`);
+	}
 }
 
 /** Fetch one ad's detail page and store it. A gone ad (404) is marked fetched with no data. */
@@ -211,12 +404,12 @@ export async function refreshDetails(finnkode: string, url: string, now = new Da
 		.where(eq(listings.finnkode, finnkode));
 }
 
-// Detail pages cost one request each (~900 active listings), so spread them over runs.
+// Detail pages cost one request each, so spread them over runs.
 const DETAIL_BUDGET = 150;
 // Viewings get added/changed after publication, so re-fetch relevant listings this often.
 const DETAIL_REFRESH_MS = 20 * 60 * 60 * 1000;
-// Refreshing all ~900 daily would be too many requests; viewings are mostly scheduled in the
-// first couple of weeks, so only keep refreshing recent listings and the ones you follow.
+// Refreshing every listing daily would be too many requests; viewings are mostly scheduled in
+// the first couple of weeks, so only keep refreshing recent listings and the ones you follow.
 const REFRESH_RECENT_MS = 14 * 24 * 60 * 60 * 1000;
 
 // Pull bedrooms, district and viewings from each ad's detail page. Never-fetched listings go
@@ -260,13 +453,7 @@ async function enrichDetails(now: Date): Promise<void> {
 			// Several in a row usually means we're being rate-limited — try again next run
 			if (++failures >= 3) break;
 		}
-		await new Promise((r) => setTimeout(r, 800));
+		await pause(800);
 	}
 	console.log(`Fetched details for ${ok}/${due.length} listings`);
-}
-
-async function markNotified(rows: Listing[], when: Date) {
-	for (const l of rows) {
-		await db.update(listings).set({ notifiedAt: when }).where(eq(listings.finnkode, l.finnkode));
-	}
 }

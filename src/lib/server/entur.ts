@@ -1,21 +1,25 @@
 // Entur APIs — free, only need an ET-Client-Name header.
 //   journey-planner — public transport routing (GraphQL)
 //   geocoder        — address → coordinates (Pelias)
+import type { TravelMode } from '$lib/search';
+
 const JOURNEY_URL = 'https://api.entur.io/journey-planner/v3/graphql';
 const GEOCODER_URL = 'https://api.entur.io/geocoder/v1/search';
 const CLIENT_NAME = 'erikak-bolig';
 
-// Verkstedveien 1, 0277 Oslo (Skøyen)
-const WORK = { latitude: 59.92126, longitude: 10.68594 };
+/** Verkstedveien 1, 0277 Oslo (Skøyen) — Erik's work, the original hard-coded destination */
+export const ERIK_WORK = { address: 'Verkstedveien 1, Oslo', lat: 59.92126, lon: 10.68594 };
 
+// Car: a direct car route only. Transit: the default modes (walk + any public transport).
 const TRIP_QUERY = `
-query Trip($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $dateTime: DateTime!) {
+query Trip($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $dateTime: DateTime!, $modes: Modes) {
 	trip(
 		from: { coordinates: { latitude: $fromLat, longitude: $fromLon } }
 		to: { coordinates: { latitude: $toLat, longitude: $toLon } }
 		dateTime: $dateTime
 		arriveBy: true
 		numTripPatterns: 3
+		modes: $modes
 	) {
 		tripPatterns { duration }
 	}
@@ -32,18 +36,24 @@ function nextWeekdayMorning(): string {
 	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T08:30:00+01:00`;
 }
 
-export async function transitMinutesToWork(lat: number, lon: number): Promise<number | null> {
+/** Fastest trip in minutes from a listing to `to`, arriving at 08:30 the next weekday. */
+export async function travelMinutes(
+	from: { lat: number; lon: number },
+	to: { lat: number; lon: number },
+	mode: TravelMode
+): Promise<number | null> {
 	const res = await fetch(JOURNEY_URL, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', 'ET-Client-Name': CLIENT_NAME },
 		body: JSON.stringify({
 			query: TRIP_QUERY,
 			variables: {
-				fromLat: lat,
-				fromLon: lon,
-				toLat: WORK.latitude,
-				toLon: WORK.longitude,
-				dateTime: nextWeekdayMorning()
+				fromLat: from.lat,
+				fromLon: from.lon,
+				toLat: to.lat,
+				toLon: to.lon,
+				dateTime: nextWeekdayMorning(),
+				modes: mode === 'car' ? { directMode: 'car', transportModes: [] } : null
 			}
 		})
 	});
@@ -62,7 +72,7 @@ export async function transitMinutesToWork(lat: number, lon: number): Promise<nu
 
 export async function geocodeAddress(
 	address: string
-): Promise<{ lat: number; lon: number } | null> {
+): Promise<{ lat: number; lon: number; label: string } | null> {
 	const url = `${GEOCODER_URL}?${new URLSearchParams({
 		text: address,
 		'boundary.country': 'NO',
@@ -77,5 +87,5 @@ export async function geocodeAddress(
 	const feat = data?.features?.[0];
 	if (!feat?.geometry?.coordinates) return null;
 	const [lon, lat] = feat.geometry.coordinates;
-	return { lat, lon };
+	return { lat, lon, label: feat.properties?.label ?? address };
 }

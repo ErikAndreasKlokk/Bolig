@@ -1,6 +1,6 @@
 import { and, asc, eq, min } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { listings, listingUserState, priceHistory } from '$lib/server/db/schema';
+import { listingMatches, listings, listingUserState, priceHistory } from '$lib/server/db/schema';
 import { requireUser } from '$lib/server/auth';
 import { areaOf, effectivePrice, pricePerM2 } from '$lib/listing';
 import type { PageServerLoad } from './$types';
@@ -17,8 +17,15 @@ function median(xs: number[]): number | null {
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const user = requireUser(locals);
-	const rows = await db.select().from(listings);
-	// Only the ★ marker is personal here; the stats are about the whole market
+	// The market your own search covers. "Gone" means gone from Finn (no search returns it any
+	// more), not just out of your criteria — so active/lastSeenAt come from the listing itself.
+	const rows = (
+		await db
+			.select({ listing: listings, firstSeenAt: listingMatches.firstSeenAt })
+			.from(listingMatches)
+			.innerJoin(listings, eq(listings.finnkode, listingMatches.finnkode))
+			.where(eq(listingMatches.userId, user.id))
+	).map((r) => ({ ...r.listing, firstSeenAt: r.firstSeenAt }));
 	const favorites = new Set(
 		(
 			await db
@@ -28,8 +35,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		).map((r) => r.finnkode)
 	);
 	const [{ trackingStart }] = await db
-		.select({ trackingStart: min(listings.firstSeenAt) })
-		.from(listings);
+		.select({ trackingStart: min(listingMatches.firstSeenAt) })
+		.from(listingMatches)
+		.where(eq(listingMatches.userId, user.id));
 
 	// First and last observed price per listing
 	const hist = await db

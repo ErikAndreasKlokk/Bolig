@@ -7,6 +7,7 @@
 	import ListingMap from '$lib/components/ListingMap.svelte';
 	import ListingDrawer from '$lib/components/ListingDrawer.svelte';
 	import { formatViewing, LISTING_STATUSES, STATUS_LABELS, type ListingStatus } from '$lib/listing';
+	import { TRAVEL_ICONS } from '$lib/search';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData } from './$types';
 
@@ -166,7 +167,8 @@
 		<div class="min-w-0">
 			<h1 class="text-xl font-bold sm:text-2xl">Boligjakt 🏠</h1>
 			<p class="text-xs text-gray-500 sm:text-sm">
-				3–5 mill. kr i Oslo og Bærum · reisetid til Verkstedveien 1 (Skøyen)
+				{data.searchSummary}{#if data.travelSummary}
+					· reisetid {data.travelSummary}{/if}
 			</p>
 		</div>
 		<nav class="flex flex-wrap items-center gap-2 text-sm">
@@ -416,7 +418,16 @@
 				</section>
 			{/if}
 
-			{#if data.listings.length === 0}
+			{#if !data.hasSearch}
+				<div class="rounded-xl border border-blue-200 bg-blue-50 p-5 text-center">
+					<p class="font-medium text-blue-900">Du har ikke satt opp et søk ennå.</p>
+					<p class="mt-1 text-sm text-blue-800">
+						Velg områder og pris i
+						<a href={resolve('/settings')} class="font-medium underline">Innstillinger</a>, så
+						henter vi boliger fra Finn med en gang.
+					</p>
+				</div>
+			{:else if data.listings.length === 0}
 				<p class="py-16 text-center text-gray-500">Ingen boliger matcher filtrene.</p>
 			{/if}
 
@@ -500,7 +511,8 @@
 										? 'text-green-700'
 										: 'text-gray-700'}"
 								>
-									🚇 {l.travelMinutes !== null ? `${l.travelMinutes} min` : 'ukjent'}
+									{TRAVEL_ICONS[data.settings.travelMode]}
+									{l.travelMinutes !== null ? `${l.travelMinutes} min` : 'ukjent'}
 								</span>
 								{#if l.priceHistory.length >= 2}
 									{@const trend = priceTrend(l.priceHistory)}
@@ -680,6 +692,14 @@
 				{#if mapActive}
 					<ListingMap
 						listings={data.listings}
+						work={data.settings.workLat !== null && data.settings.workLon !== null
+							? {
+									lat: data.settings.workLat,
+									lon: data.settings.workLon,
+									label: data.settings.workAddress ?? ''
+								}
+							: null}
+						travelIcon={TRAVEL_ICONS[data.settings.travelMode]}
 						highlight={hovered}
 						onopen={openListing}
 						heightClass="h-[70vh] min-h-[400px] lg:h-[calc(100vh-7.5rem)]"
@@ -694,6 +714,7 @@
 	<ListingDrawer
 		listing={openListingData}
 		interestRate={data.settings.interestRate}
+		travelIcon={TRAVEL_ICONS[data.settings.travelMode]}
 		onclose={() => history.back()}
 	/>
 {/if}

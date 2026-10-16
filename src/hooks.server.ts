@@ -2,7 +2,7 @@ import { building } from '$app/environment';
 import { error, redirect, type Handle } from '@sveltejs/kit';
 import { runScrape } from '$lib/server/scraper';
 import { SESSION_COOKIE, userFromSession } from '$lib/server/auth';
-import { migrateLegacyListingState } from '$lib/server/userState';
+import { migrateLegacyListingState, migrateLegacyMatches } from '$lib/server/userState';
 
 // Reachable without logging in. /health is the k8s probe.
 const PUBLIC_PATHS = ['/login', '/health'];
@@ -53,23 +53,36 @@ function msUntilNextRun(now: Date): number {
 	return next.getTime() - now.getTime();
 }
 
+// The one-time data migrations must finish before the first scrape: until Erik's matches and
+// search exist, a scrape would see no searches and treat every listing as new.
+const migrated: Promise<boolean> = building
+	? Promise.resolve(false)
+	: migrateLegacyListingState()
+			.then(migrateLegacyMatches)
+			.then(
+				() => true,
+				(e) => {
+					console.error('Data migration failed — not scraping until it succeeds:', e);
+					return false;
+				}
+			);
+
+async function scrape(label: string): Promise<void> {
+	if (!(await migrated)) return;
+	await runScrape().catch((e) => console.error(`${label} scrape failed:`, e));
+}
+
 function scheduleNext(): void {
 	const delay = msUntilNextRun(new Date());
 	setTimeout(() => {
-		runScrape().catch((e) => console.error('Scheduled scrape failed:', e));
+		void scrape('Scheduled');
 		scheduleNext();
 	}, delay);
 }
 
 if (!building) {
-	migrateLegacyListingState().catch((e) => console.error('Listing state migration failed:', e));
-
 	// Populate right away on boot, but only if we're already within the daytime window
 	// (so a deploy in the evening doesn't kick off a scrape outside the intended hours).
-	if (inWindow(new Date())) {
-		setTimeout(() => {
-			runScrape().catch((e) => console.error('Initial scrape failed:', e));
-		}, 10_000);
-	}
+	if (inWindow(new Date())) setTimeout(() => void scrape('Initial'), 10_000);
 	scheduleNext();
 }

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from './db';
 import { listingUserState } from './db/schema';
+import { ERIK_WORK } from './entur';
 import type { ListingStatus } from '$lib/listing';
 
 export type ListingStatePatch = Partial<{
@@ -39,4 +40,35 @@ export async function migrateLegacyListingState(): Promise<void> {
 			and not exists (select 1 from listing_user_state)
 	`);
 	if (result.count > 0) console.log(`Copied ${result.count} legacy listing states to Erik`);
+}
+
+/**
+ * Before per-user searches, there was one hard-coded search (Oslo + Bærum, 3–5 mill.) with travel
+ * time to Erik's work, and every listing came from it. Make that Erik's search and copy the
+ * listings in as his matches — keeping notified/travel state so he isn't re-notified. Runs once:
+ * a no-op as soon as listing_matches has any rows.
+ */
+export async function migrateLegacyMatches(): Promise<void> {
+	await db.transaction(async (tx) => {
+		const [{ n }] = await tx.execute<{ n: number }>(
+			sql`select count(*)::int as n from listing_matches`
+		);
+		if (n > 0) return;
+		const copied = await tx.execute(sql`
+			insert into listing_matches (user_id, finnkode, first_seen_at, last_seen_at, active, notified_at, travel_minutes)
+			select 1, finnkode, first_seen_at, last_seen_at, active, notified_at, travel_minutes from listings
+		`);
+		if (copied.count === 0) return; // fresh database — nothing to carry over
+		await tx.execute(sql`insert into user_settings (id) values (1) on conflict do nothing`);
+		await tx.execute(sql`
+			update user_settings set
+				search_locations = ${JSON.stringify(['0.20061', '1.20003.20045'])}::jsonb,
+				price_from = 3000000, price_to = 5000000,
+				search_pending = false,
+				work_address = ${ERIK_WORK.address}, work_lat = ${ERIK_WORK.lat}, work_lon = ${ERIK_WORK.lon},
+				travel_mode = 'transit'
+			where id = 1
+		`);
+		console.log(`Made the old search Erik's and copied ${copied.count} listings as his matches`);
+	});
 }

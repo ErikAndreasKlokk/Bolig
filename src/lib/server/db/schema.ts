@@ -24,7 +24,25 @@ export const userSettings = pgTable('user_settings', {
 	interestRate: doublePrecision('interest_rate').notNull().default(5.0),
 	stressRate: doublePrecision('stress_rate').notNull().default(7.0),
 	loanYears: integer('loan_years').notNull().default(30),
-	minEquityPct: integer('min_equity_pct').notNull().default(10)
+	minEquityPct: integer('min_equity_pct').notNull().default(10),
+
+	// This user's Finn search (see $lib/search). No locations = no search.
+	searchLocations: jsonb('search_locations').$type<string[]>().notNull().default([]),
+	priceFrom: integer('price_from'),
+	priceTo: integer('price_to'),
+	propertyTypes: jsonb('property_types').$type<string[]>().notNull().default([]),
+	ownershipTypes: jsonb('ownership_types').$type<string[]>().notNull().default([]),
+	minSizeM2: integer('min_size_m2'),
+	minBedrooms: integer('min_bedrooms'),
+	// Set when the search changes: the next scrape files all new matches as already notified
+	// instead of posting hundreds of "new listing" messages
+	searchPending: boolean('search_pending').notNull().default(true),
+
+	// Travel time is measured from each listing to here, arriving 08:30 on a weekday
+	workAddress: text('work_address'),
+	workLat: doublePrecision('work_lat'),
+	workLon: doublePrecision('work_lon'),
+	travelMode: text('travel_mode').$type<'transit' | 'car'>().notNull().default('transit')
 });
 
 export type UserSettings = typeof userSettings.$inferSelect;
@@ -46,13 +64,14 @@ export const listings = pgTable('listings', {
 	url: text('url').notNull(),
 	imageUrl: text('image_url'),
 	publishedAt: timestamp('published_at'),
-	travelMinutes: integer('travel_minutes'),
 	firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
 	lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
+	// Some user's search still returns it (see listing_matches)
 	active: boolean('active').notNull().default(true),
-	// Legacy single-user tracking, superseded by listing_user_state. Only read once, to copy into
-	// Erik's rows (userState.migrateLegacyListingState) — drop these columns (also `status` and
-	// `note` below) once that has run in production.
+	// Legacy single-user columns, superseded by listing_user_state (hidden/favorite/status/note)
+	// and listing_matches (travelMinutes/notifiedAt). Only read once, to copy into Erik's rows
+	// (userState.migrateLegacy*) — drop them once that has run in production.
+	travelMinutes: integer('travel_minutes'),
 	hidden: boolean('hidden').notNull().default(false),
 	favorite: boolean('favorite').notNull().default(false),
 	notifiedAt: timestamp('notified_at'),
@@ -93,6 +112,28 @@ export const listingUserState = pgTable(
 );
 
 export type ListingUserState = typeof listingUserState.$inferSelect;
+
+// Which listings each user's own Finn search returned. `active` = still in their results; the
+// listing itself (listings.active) is active while any user's search still returns it.
+export const listingMatches = pgTable(
+	'listing_matches',
+	{
+		userId: integer('user_id').notNull(),
+		finnkode: text('finnkode').notNull(),
+		firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
+		lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
+		active: boolean('active').notNull().default(true),
+		notifiedAt: timestamp('notified_at'),
+		// To this user's work address (user_settings.work*), by their travel mode
+		travelMinutes: integer('travel_minutes')
+	},
+	(t) => [
+		primaryKey({ columns: [t.userId, t.finnkode] }),
+		index('listing_matches_finnkode_idx').on(t.finnkode)
+	]
+);
+
+export type ListingMatch = typeof listingMatches.$inferSelect;
 
 // One row per observed price change for a listing (also seeded on first sight),
 // so we can show a price graph and detect drops over time.

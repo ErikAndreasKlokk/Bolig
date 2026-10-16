@@ -22,19 +22,26 @@
 
 	let {
 		listings,
+		work = null,
+		travelIcon = '🚇',
 		highlight = null,
 		onopen,
 		heightClass = 'h-[70vh] min-h-[400px]'
 	}: {
 		listings: MapListing[];
+		/** The user's work address — the point travel times are measured to */
+		work?: { lat: number; lon: number; label: string } | null;
+		travelIcon?: string;
 		/** finnkode of the listing to emphasise (e.g. the card under the mouse) */
 		highlight?: string | null;
 		onopen?: (finnkode: string) => void;
 		heightClass?: string;
 	} = $props();
 
-	// Verkstedveien 1, Skøyen — same point Entur routes to (see server/entur.ts)
-	const WORK: [number, number] = [59.92126, 10.68594];
+	// Read once at mount — the map is re-created on navigation anyway
+	const WORK: [number, number] | null = untrack(() => (work ? [work.lat, work.lon] : null));
+	// Fallback view (central Oslo) when there's no work address
+	const CENTER: [number, number] = WORK ?? [59.9139, 10.7522];
 
 	const BUCKETS = [
 		{ max: 20, color: '#16a34a', label: '≤ 20 min' },
@@ -62,7 +69,7 @@
 		const facts = [
 			price !== null ? `${price.toLocaleString('no-NO')} kr` : null,
 			l.sizeM2 ? `${l.sizeM2} m²` : null,
-			l.travelMinutes !== null ? `🚇 ${l.travelMinutes} min` : null
+			l.travelMinutes !== null ? `${travelIcon} ${l.travelMinutes} min` : null
 		].filter(Boolean);
 		return `
 			<div style="width:220px;white-space:normal">
@@ -117,7 +124,7 @@
 		layer.clearLayers();
 		markers.clear();
 		highlighted = null;
-		const points: [number, number][] = [WORK];
+		const points: [number, number][] = WORK ? [WORK] : [];
 		// Draw favorites last so they sit on top
 		const sorted = [...listings].sort((a, b) => Number(a.favorite) - Number(b.favorite));
 		for (const l of sorted) {
@@ -147,16 +154,18 @@
 		(async () => {
 			L = await import('leaflet');
 			if (cancelled) return;
-			map = L.map(container).setView(WORK, 12);
+			map = L.map(container).setView(CENTER, 12);
 			L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 				maxZoom: 19,
 				attribution: '&copy; OpenStreetMap-bidragsytere'
 			}).addTo(map);
-			L.marker(WORK, {
-				icon: L.divIcon({ html: '💼', className: '', iconSize: [24, 24], iconAnchor: [12, 12] })
-			})
-				.bindTooltip('Jobb — Verkstedveien 1')
-				.addTo(map);
+			if (WORK && work) {
+				L.marker(WORK, {
+					icon: L.divIcon({ html: '💼', className: '', iconSize: [24, 24], iconAnchor: [12, 12] })
+				})
+					.bindTooltip(`Jobb — ${esc(work.label)}`)
+					.addTo(map);
+			}
 			layer = L.layerGroup().addTo(map);
 			map.on('dragstart', () => (userMoved = true));
 			container.addEventListener('wheel', () => (userMoved = true), { passive: true });

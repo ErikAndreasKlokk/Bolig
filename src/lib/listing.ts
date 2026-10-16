@@ -41,14 +41,11 @@ export function isListingStatus(s: unknown): s is ListingStatus {
 }
 
 /**
- * Area used for grouping/filtering: Finn's bydel (from the detail page) when known. Before the
- * details are fetched, the address' post town still tells Bærum apart (the search only covers
- * Oslo + Bærum, and Oslo addresses end in "Oslo").
+ * Area used for grouping/filtering: Finn's bydel in Oslo, else the municipality (both from the
+ * detail page). Before the details are fetched, fall back to the address' post town.
  */
 export function areaOf(l: { district: string | null; localArea: string | null }): string | null {
-	if (l.district) return l.district;
-	if (l.localArea && l.localArea !== 'Oslo') return 'Bærum';
-	return null;
+	return l.district ?? l.localArea ?? null;
 }
 
 /** Viewings that haven't ended yet, soonest first. */

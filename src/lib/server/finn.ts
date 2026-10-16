@@ -1,15 +1,9 @@
 // Finn.no has no public JSON search endpoint — the listings page is server-rendered HTML.
 // We parse the `<article class="sf-search-ad">` cards directly.
 import type { ListingFact, ListingImage, Viewing } from '$lib/listing';
+import { locationName, type FinnSearch } from '$lib/search';
 
 const SEARCH_URL = 'https://www.finn.no/realestate/homes/search.html';
-
-// Location codes (verified by selecting the area on finn.no and reading ?location=...)
-const LOCATION_OSLO = '0.20061';
-const LOCATION_BAERUM = '1.20003.20045';
-
-const PRICE_FROM = 3_000_000;
-const PRICE_TO = 5_000_000;
 
 const USER_AGENT =
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -33,14 +27,17 @@ export interface FinnListing {
 	publishedAt: Date | null;
 }
 
-function buildUrl(page: number): string {
-	const p = new URLSearchParams([
-		['location', LOCATION_OSLO],
-		['location', LOCATION_BAERUM],
-		['price_collective_from', String(PRICE_FROM)],
-		['price_collective_to', String(PRICE_TO)],
-		['sort', 'PUBLISHED_DESC']
-	]);
+// Same parameters finn.no's own filters put in the URL
+export function buildSearchUrl(s: FinnSearch, page = 1): string {
+	const p = new URLSearchParams();
+	for (const loc of s.searchLocations) p.append('location', loc);
+	if (s.priceFrom) p.set('price_collective_from', String(s.priceFrom));
+	if (s.priceTo) p.set('price_collective_to', String(s.priceTo));
+	for (const t of s.propertyTypes) p.append('property_type', t);
+	for (const t of s.ownershipTypes) p.append('ownership_type', t);
+	if (s.minSizeM2) p.set('area_from', String(s.minSizeM2));
+	if (s.minBedrooms) p.set('min_bedrooms', String(s.minBedrooms));
+	p.set('sort', 'PUBLISHED_DESC');
 	if (page > 1) p.set('page', String(page));
 	return `${SEARCH_URL}?${p}`;
 }
@@ -122,8 +119,10 @@ function extractCard(html: string): FinnListing | null {
 	const typeMatch = html.match(
 		/<span>([^<]*?(?:Selveier|Andel|Aksje|Obligasjon|Eiet|Festet)[^<]*)<\/span>/
 	);
+	// Newer cards append the bedroom count: "Selveier · Leilighet · 3 soverom"
 	let ownerType: string | null = null;
 	let propertyType: string | null = null;
+	let bedrooms: number | null = null;
 	if (typeMatch) {
 		const parts = decode(typeMatch[1])
 			.split(/\s*[·∙]\s*/)
@@ -131,6 +130,8 @@ function extractCard(html: string): FinnListing | null {
 			.filter(Boolean);
 		ownerType = parts[0] ?? null;
 		propertyType = parts[1] ?? null;
+		const bed = parts.find((p) => /^\d+\s+soverom$/i.test(p));
+		bedrooms = bed ? parseInt(bed) : null;
 	}
 
 	// Ad link — new-build projects live under /realestate/project(single)/, not /homes/
@@ -154,7 +155,7 @@ function extractCard(html: string): FinnListing | null {
 		priceSuggestion,
 		sharedCost,
 		sizeM2,
-		bedrooms: null, // Not exposed on the search card — would require fetching detail page
+		bedrooms, // When the card shows it; the detail page fills it in otherwise
 		propertyType,
 		ownerType,
 		lat: null, // Filled by geocoder later
@@ -165,14 +166,15 @@ function extractCard(html: string): FinnListing | null {
 	};
 }
 
-async function fetchPage(page: number): Promise<{ listings: FinnListing[]; nextPage: boolean }> {
-	const res = await fetch(buildUrl(page), {
+async function fetchPage(
+	search: FinnSearch,
+	page: number
+): Promise<{ listings: FinnListing[]; nextPage: boolean }> {
+	const res = await fetch(buildSearchUrl(search, page), {
 		headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' }
 	});
 	if (!res.ok) throw new Error(`Finn search failed: ${res.status} ${res.statusText}`);
 	const html = await res.text();
-
-	if (page === 1) learnOsloDistricts(html);
 
 	const cards = html.split(/<article class="[^"]*sf-search-ad[^"]*"/).slice(1);
 	const listings = cards
@@ -346,23 +348,19 @@ function parseViewings(html: string): Viewing[] {
 	return viewings;
 }
 
-// Oslo bydel names keyed by Finn's sub-area code (e.g. "20511" → "Grünerløkka - Sofienberg").
-// The search page's location filter embeds them as `"Name","1.20061.20511"` (JSON-escaped).
-const osloDistricts = new Map<string, string>();
-
-function learnOsloDistricts(html: string): void {
-	for (const m of html.matchAll(/\\?"([^"\\]{2,60})\\?",\\?"1\.20061\.(\d+)\\?"/g)) {
-		osloDistricts.set(m[2], decode(m[1]));
-	}
-	if (osloDistricts.size === 0) console.warn('Found no Oslo districts on the search page');
-}
+const OSLO_COUNTY = '20061';
 
 // The ad's own `local_area_name` is free text from the broker ("Bo midt på Majorstuen", often
-// missing), useless for grouping. Use Finn's bydel for Oslo; Bærum has no sub-areas on Finn.
+// missing), useless for grouping. Use Finn's bydel in Oslo (sub_area, e.g. 1.20061.20520) and the
+// municipality everywhere else (1.<county>.<municipality>, e.g. 1.20003.20045 = Bærum).
 function districtOf(kv: Map<string, string>): string | null {
-	if (kv.get('municipality') === '20045') return 'Bærum';
-	const sub = kv.get('sub_area');
-	return (sub && osloDistricts.get(sub)) || null;
+	const county = kv.get('county');
+	const code =
+		county === OSLO_COUNTY
+			? `1.${OSLO_COUNTY}.${kv.get('sub_area')}`
+			: `1.${county}.${kv.get('municipality')}`;
+	const name = locationName(code);
+	return name === code ? null : name;
 }
 
 /** Fetch an ad's detail page. Returns null when the ad is gone (404/410). */
@@ -398,13 +396,15 @@ export async function fetchDetails(url: string): Promise<FinnDetails | null> {
 	};
 }
 
-export async function fetchAllListings(maxPages = 50): Promise<FinnListing[]> {
+export async function fetchAllListings(search: FinnSearch, maxPages = 50): Promise<FinnListing[]> {
 	const all: FinnListing[] = [];
 	let page = 1;
 
 	for (;;) {
-		const { listings, nextPage } = await fetchPage(page);
+		const { listings, nextPage } = await fetchPage(search, page);
 		all.push(...listings);
+		if (nextPage && page >= maxPages)
+			console.warn(`Search has more than ${maxPages} pages — the rest is cut off; narrow it down`);
 		if (!nextPage || page >= maxPages || listings.length === 0) break;
 		page++;
 		await new Promise((r) => setTimeout(r, 1000));

@@ -48,8 +48,14 @@
 	let {
 		listing,
 		interestRate,
+		travelIcon,
 		onclose
-	}: { listing: DrawerListing; interestRate: number; onclose: () => void } = $props();
+	}: {
+		listing: DrawerListing;
+		interestRate: number;
+		travelIcon: string;
+		onclose: () => void;
+	} = $props();
 
 	// Raw: replaced wholesale, never mutated — and keeps object identity stable for the carousel
 	let detail: ListingDetail | null = $state.raw(null);
@@ -208,7 +214,8 @@
 						{/if}
 						{#if listing.propertyType}<span>{listing.propertyType}</span>{/if}
 						<span
-							>🚇 {listing.travelMinutes !== null
+							>{travelIcon}
+							{listing.travelMinutes !== null
 								? `${listing.travelMinutes} min til jobb`
 								: 'reisetid ukjent'}</span
 						>
