@@ -1,5 +1,21 @@
 import { building } from '$app/environment';
+import { error, redirect, type Handle } from '@sveltejs/kit';
 import { runScrape } from '$lib/server/scraper';
+import { SESSION_COOKIE, userFromSession } from '$lib/server/auth';
+import { migrateLegacyListingState } from '$lib/server/userState';
+
+// Reachable without logging in. /health is the k8s probe.
+const PUBLIC_PATHS = ['/login', '/health'];
+
+export const handle: Handle = async ({ event, resolve }) => {
+	event.locals.user = userFromSession(event.cookies.get(SESSION_COOKIE));
+	if (!event.locals.user && !PUBLIC_PATHS.includes(event.url.pathname)) {
+		if (event.url.pathname.startsWith('/api/')) error(401, 'Ikke innlogget');
+		const next = event.url.pathname + event.url.search;
+		redirect(303, next === '/' ? '/login' : `/login?next=${encodeURIComponent(next)}`);
+	}
+	return resolve(event);
+};
 
 // Scrape once at the top of each hour, daytime only — there's no point hammering
 // Finn at night. Inclusive range: runs at 10:00, 11:00, … 16:00 Oslo time.
@@ -46,6 +62,8 @@ function scheduleNext(): void {
 }
 
 if (!building) {
+	migrateLegacyListingState().catch((e) => console.error('Listing state migration failed:', e));
+
 	// Populate right away on boot, but only if we're already within the daytime window
 	// (so a deploy in the evening doesn't kick off a scrape outside the intended hours).
 	if (inWindow(new Date())) {

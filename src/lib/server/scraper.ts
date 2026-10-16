@@ -1,23 +1,17 @@
-import {
-	eq,
-	notInArray,
-	isNull,
-	isNotNull,
-	and,
-	or,
-	lt,
-	gt,
-	inArray,
-	desc,
-	sql
-} from 'drizzle-orm';
+import { eq, notInArray, isNull, and, or, lt, gt, inArray, desc, not, sql } from 'drizzle-orm';
 import { db } from './db';
-import { listings, priceHistory, type Listing } from './db/schema';
+import { listings, listingUserState, priceHistory, type Listing } from './db/schema';
+import { USERS } from '$lib/users';
 import { fetchAllListings, fetchDetails } from './finn';
 import { transitMinutesToWork, geocodeAddress } from './entur';
 import { notifyNewListings, notifyPriceDrops, type PriceDrop } from './discord';
 
 let running = false;
+
+// Tracking is per user (listing_user_state). Someone follows a listing if they starred it or
+// gave it a status; it's only uninteresting to the shared Discord feed if *everyone* hid it.
+const followedBySomeone = sql`exists (select 1 from ${listingUserState} s where s.finnkode = ${listings.finnkode} and (s.favorite or s.status is not null))`;
+const hiddenByEveryone = sql`((select count(*) from ${listingUserState} s where s.finnkode = ${listings.finnkode} and s.hidden) >= ${USERS.length})`;
 
 export async function runScrape(): Promise<{ total: number; added: number }> {
 	if (running) {
@@ -179,9 +173,12 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 			.select()
 			.from(listings)
 			.where(
-				inArray(
-					listings.finnkode,
-					dropKeys.map((d) => d.finnkode)
+				and(
+					inArray(
+						listings.finnkode,
+						dropKeys.map((d) => d.finnkode)
+					),
+					not(hiddenByEveryone)
 				)
 			);
 		const byKey = new Map(rows.map((r) => [r.finnkode, r]));
@@ -190,7 +187,7 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 				const listing = byKey.get(d.finnkode);
 				return listing ? { listing, oldPrice: d.oldPrice, newPrice: d.newPrice } : null;
 			})
-			.filter((d): d is PriceDrop => d !== null && !d.listing.hidden);
+			.filter((d): d is PriceDrop => d !== null);
 		if (drops.length > 0) await notifyPriceDrops(drops);
 		console.log(`Notified ${drops.length} price drops`);
 	}
@@ -239,11 +236,7 @@ async function enrichDetails(now: Date): Promise<void> {
 				and(
 					eq(listings.active, true),
 					lt(listings.detailsFetchedAt, staleBefore),
-					or(
-						eq(listings.favorite, true),
-						isNotNull(listings.status),
-						and(eq(listings.hidden, false), gt(listings.firstSeenAt, recentAfter))
-					)
+					or(followedBySomeone, and(not(hiddenByEveryone), gt(listings.firstSeenAt, recentAfter)))
 				)
 			)
 		)

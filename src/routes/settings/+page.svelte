@@ -11,7 +11,10 @@
 
 <div class="mx-auto max-w-2xl px-3 py-6 sm:px-4 sm:py-8">
 	<header class="mb-6 flex items-center justify-between gap-3">
-		<h1 class="text-2xl font-bold sm:text-3xl">⚙ Innstillinger</h1>
+		<div>
+			<h1 class="text-2xl font-bold sm:text-3xl">⚙ Innstillinger</h1>
+			<p class="mt-1 text-sm text-gray-500">Gjelder bare for {data.userName}</p>
+		</div>
 		<a
 			href={resolve('/')}
 			class="inline-flex min-h-10 shrink-0 items-center rounded-full border border-gray-200 px-3.5 text-sm text-blue-600"

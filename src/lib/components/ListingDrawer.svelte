@@ -90,10 +90,12 @@
 		};
 	});
 
+	// The carousel gets first pick (its photo viewer claims Escape too); arrow keys are left
+	// alone while typing a note or choosing a status
 	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onclose();
-		else if (!(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement))
-			if (carousel?.handleKey(e)) e.preventDefault();
+		const typing = e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
+		if (!typing && carousel?.handleKey(e)) e.preventDefault();
+		else if (e.key === 'Escape') onclose();
 	}
 
 	const keepValues: SubmitFunction =

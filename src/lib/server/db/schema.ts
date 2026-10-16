@@ -7,11 +7,13 @@ import {
 	boolean,
 	serial,
 	index,
-	jsonb
+	jsonb,
+	primaryKey
 } from 'drizzle-orm/pg-core';
 // Relative (not $lib) so drizzle-kit can resolve it outside Vite
 import type { ListingFact, ListingImage, ListingStatus, Viewing } from '../../listing';
 
+// One row per user; `id` is the user id from $lib/users (1 = Erik, the original single row)
 export const userSettings = pgTable('user_settings', {
 	id: integer('id').primaryKey().default(1),
 	grossIncome: integer('gross_income').notNull().default(555000),
@@ -48,6 +50,9 @@ export const listings = pgTable('listings', {
 	firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
 	lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
 	active: boolean('active').notNull().default(true),
+	// Legacy single-user tracking, superseded by listing_user_state. Only read once, to copy into
+	// Erik's rows (userState.migrateLegacyListingState) — drop these columns (also `status` and
+	// `note` below) once that has run in production.
 	hidden: boolean('hidden').notNull().default(false),
 	favorite: boolean('favorite').notNull().default(false),
 	notifiedAt: timestamp('notified_at'),
@@ -62,13 +67,32 @@ export const listings = pgTable('listings', {
 	description: text('description'),
 	facilities: jsonb('facilities').$type<string[]>(),
 	detailsFetchedAt: timestamp('details_fetched_at'),
-	// Personal tracking
+	// Legacy, see `hidden` above
 	status: text('status').$type<ListingStatus>(),
 	note: text('note')
 });
 
 export type Listing = typeof listings.$inferSelect;
 export type NewListing = typeof listings.$inferInsert;
+
+// Each user's own favorite/hidden/status/note per listing. A missing row means "untouched".
+export const listingUserState = pgTable(
+	'listing_user_state',
+	{
+		userId: integer('user_id').notNull(),
+		finnkode: text('finnkode').notNull(),
+		favorite: boolean('favorite').notNull().default(false),
+		hidden: boolean('hidden').notNull().default(false),
+		status: text('status').$type<ListingStatus>(),
+		note: text('note')
+	},
+	(t) => [
+		primaryKey({ columns: [t.userId, t.finnkode] }),
+		index('listing_user_state_finnkode_idx').on(t.finnkode)
+	]
+);
+
+export type ListingUserState = typeof listingUserState.$inferSelect;
 
 // One row per observed price change for a listing (also seeded on first sight),
 // so we can show a price graph and detect drops over time.

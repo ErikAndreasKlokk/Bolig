@@ -204,6 +204,15 @@
 			>
 				⚙ Innstillinger
 			</a>
+			<form method="POST" action="{resolve('/login')}?/logout">
+				<button
+					type="submit"
+					class="inline-flex min-h-10 items-center gap-1.5 rounded-full border border-gray-200 px-3.5 text-gray-700 hover:bg-gray-50"
+					title="Logg ut"
+				>
+					👤 {data.user.name} <span class="text-xs text-gray-400">· Logg ut</span>
+				</button>
+			</form>
 		</nav>
 	</header>
 

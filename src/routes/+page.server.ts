@@ -1,8 +1,10 @@
-import { eq, asc, and, or, inArray, getTableColumns, type SQL } from 'drizzle-orm';
+import { eq, asc, and, or, inArray, getTableColumns, sql, type SQL } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { listings, priceHistory } from '$lib/server/db/schema';
+import { listings, listingUserState, priceHistory } from '$lib/server/db/schema';
 import { getSettings } from '$lib/server/settings';
+import { requireUser } from '$lib/server/auth';
+import { setListingState, type ListingStatePatch } from '$lib/server/userState';
 import { computeAffordability, type Affordability } from '$lib/affordability';
 import {
 	areaOf,
@@ -10,7 +12,6 @@ import {
 	isListingStatus,
 	pricePerM2,
 	upcomingViewings,
-	type ListingStatus,
 	type Viewing
 } from '$lib/listing';
 import type { Actions, PageServerLoad } from './$types';
@@ -32,7 +33,8 @@ function intParam(url: URL, key: string): number | null {
 	return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, locals }) => {
+	const user = requireUser(locals);
 	const showHidden = url.searchParams.get('hidden') === '1';
 	const showInactive = url.searchParams.get('inactive') === '1';
 	const onlyAffordable = url.searchParams.get('affordable') === '1';
@@ -50,28 +52,49 @@ export const load: PageServerLoad = async ({ url }) => {
 		maxTravel: intParam(url, 'maxTravel')
 	};
 
+	// The logged-in user's own tracking; no row means untouched
+	const favorite = sql<boolean>`coalesce(${listingUserState.favorite}, false)`;
+	const hidden = sql<boolean>`coalesce(${listingUserState.hidden}, false)`;
+
 	const conditions: SQL[] = [];
-	if (!showHidden) conditions.push(eq(listings.hidden, false));
+	if (!showHidden) conditions.push(sql`not ${hidden}`);
 	if (!showInactive) conditions.push(eq(listings.active, true));
 
 	// Favorites stay pinned even after they go inactive (sold / dropped off Finn) or get
 	// hidden, so a listing you starred doesn't silently vanish the next day.
-	const visibility =
-		conditions.length > 0 ? or(eq(listings.favorite, true), and(...conditions)) : undefined;
+	const visibility = conditions.length > 0 ? or(favorite, and(...conditions)) : undefined;
 
 	// Images, facts and description are only needed in the drawer, which loads them on demand
-	// (/api/listing/[finnkode]) — leave them out of this ~900-row query.
+	// (/api/listing/[finnkode]) — leave them out of this ~900-row query. The legacy single-user
+	// tracking columns are replaced by the joined per-user ones.
 	/* eslint-disable @typescript-eslint/no-unused-vars -- destructured only to leave them out */
 	const {
 		images: _images,
 		facts: _facts,
 		description: _description,
 		facilities: _facilities,
+		favorite: _favorite,
+		hidden: _hidden,
+		status: _status,
+		note: _note,
 		...cardColumns
 	} = getTableColumns(listings);
 	/* eslint-enable @typescript-eslint/no-unused-vars */
-	const rows = await db.select(cardColumns).from(listings).where(visibility);
-	const settings = await getSettings();
+	const rows = await db
+		.select({
+			...cardColumns,
+			favorite,
+			hidden,
+			status: listingUserState.status,
+			note: listingUserState.note
+		})
+		.from(listings)
+		.leftJoin(
+			listingUserState,
+			and(eq(listingUserState.finnkode, listings.finnkode), eq(listingUserState.userId, user.id))
+		)
+		.where(visibility);
+	const settings = await getSettings(user.id);
 
 	const all = rows.map((l) => ({
 		...l,
@@ -171,6 +194,7 @@ export const load: PageServerLoad = async ({ url }) => {
 	}));
 
 	return {
+		user: { key: user.key, name: user.name },
 		listings: withHistory,
 		settings,
 		showHidden,
@@ -187,23 +211,24 @@ export const load: PageServerLoad = async ({ url }) => {
 };
 
 export const actions: Actions = {
-	hide: async ({ request }) => {
+	hide: async ({ request, locals }) => {
+		const user = requireUser(locals);
 		const data = await request.formData();
 		const finnkode = String(data.get('finnkode'));
-		const hidden = data.get('hidden') === 'true';
-		await db.update(listings).set({ hidden }).where(eq(listings.finnkode, finnkode));
+		await setListingState(user.id, finnkode, { hidden: data.get('hidden') === 'true' });
 	},
-	favorite: async ({ request }) => {
+	favorite: async ({ request, locals }) => {
+		const user = requireUser(locals);
 		const data = await request.formData();
 		const finnkode = String(data.get('finnkode'));
-		const favorite = data.get('favorite') === 'true';
-		await db.update(listings).set({ favorite }).where(eq(listings.finnkode, finnkode));
+		await setListingState(user.id, finnkode, { favorite: data.get('favorite') === 'true' });
 	},
-	track: async ({ request }) => {
+	track: async ({ request, locals }) => {
+		const user = requireUser(locals);
 		const data = await request.formData();
 		const finnkode = String(data.get('finnkode'));
 		// Status and note are saved from separate forms — only touch the fields that were sent
-		const patch: { status?: ListingStatus | null; note?: string | null } = {};
+		const patch: ListingStatePatch = {};
 		if (data.has('status')) {
 			const status = data.get('status') || null;
 			if (status !== null && !isListingStatus(status))
@@ -211,7 +236,6 @@ export const actions: Actions = {
 			patch.status = status;
 		}
 		if (data.has('note')) patch.note = String(data.get('note')).trim().slice(0, 5000) || null;
-		if (Object.keys(patch).length === 0) return;
-		await db.update(listings).set(patch).where(eq(listings.finnkode, finnkode));
+		await setListingState(user.id, finnkode, patch);
 	}
 };

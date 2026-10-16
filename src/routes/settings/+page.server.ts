@@ -1,10 +1,12 @@
 import { redirect } from '@sveltejs/kit';
 import { getSettings, updateSettings } from '$lib/server/settings';
+import { requireUser } from '$lib/server/auth';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
-	const settings = await getSettings();
-	return { settings };
+export const load: PageServerLoad = async ({ locals }) => {
+	const user = requireUser(locals);
+	const settings = await getSettings(user.id);
+	return { settings, userName: user.name };
 };
 
 function num(v: FormDataEntryValue | null, fallback: number): number {
@@ -14,10 +16,11 @@ function num(v: FormDataEntryValue | null, fallback: number): number {
 }
 
 export const actions: Actions = {
-	save: async ({ request }) => {
+	save: async ({ request, locals }) => {
+		const user = requireUser(locals);
 		const data = await request.formData();
-		const current = await getSettings();
-		await updateSettings({
+		const current = await getSettings(user.id);
+		await updateSettings(user.id, {
 			grossIncome: Math.round(num(data.get('grossIncome'), current.grossIncome)),
 			netMonthly: Math.round(num(data.get('netMonthly'), current.netMonthly)),
 			savings: Math.round(num(data.get('savings'), current.savings)),

@@ -1,6 +1,7 @@
-import { asc, min } from 'drizzle-orm';
+import { and, asc, eq, min } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { listings, priceHistory } from '$lib/server/db/schema';
+import { listings, listingUserState, priceHistory } from '$lib/server/db/schema';
+import { requireUser } from '$lib/server/auth';
 import { areaOf, effectivePrice, pricePerM2 } from '$lib/listing';
 import type { PageServerLoad } from './$types';
 
@@ -14,8 +15,18 @@ function median(xs: number[]): number | null {
 	return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
 }
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ locals }) => {
+	const user = requireUser(locals);
 	const rows = await db.select().from(listings);
+	// Only the ★ marker is personal here; the stats are about the whole market
+	const favorites = new Set(
+		(
+			await db
+				.select({ finnkode: listingUserState.finnkode })
+				.from(listingUserState)
+				.where(and(eq(listingUserState.userId, user.id), eq(listingUserState.favorite, true)))
+		).map((r) => r.finnkode)
+	);
 	const [{ trackingStart }] = await db
 		.select({ trackingStart: min(listings.firstSeenAt) })
 		.from(listings);
@@ -51,8 +62,7 @@ export const load: PageServerLoad = async () => {
 			district: areaOf(l) ?? 'Ukjent område',
 			url: l.url,
 			active: l.active,
-			favorite: l.favorite,
-			status: l.status,
+			favorite: favorites.has(l.finnkode),
 			sizeM2: l.sizeM2,
 			price,
 			pricePerM2: pricePerM2(l),

@@ -2,18 +2,17 @@ import { eq } from 'drizzle-orm';
 import { db } from './db';
 import { userSettings, type UserSettings } from './db/schema';
 
-const ROW_ID = 1;
-
-export async function getSettings(): Promise<UserSettings> {
-	const rows = await db.select().from(userSettings).where(eq(userSettings.id, ROW_ID));
+// One row per user, keyed by the user id
+export async function getSettings(userId: number): Promise<UserSettings> {
+	const rows = await db.select().from(userSettings).where(eq(userSettings.id, userId));
 	if (rows.length > 0) return rows[0];
 	// Seed defaults on first call
-	await db.insert(userSettings).values({ id: ROW_ID }).onConflictDoNothing();
-	const seeded = await db.select().from(userSettings).where(eq(userSettings.id, ROW_ID));
+	await db.insert(userSettings).values({ id: userId }).onConflictDoNothing();
+	const seeded = await db.select().from(userSettings).where(eq(userSettings.id, userId));
 	return seeded[0];
 }
 
-export async function updateSettings(patch: Partial<UserSettings>): Promise<void> {
-	await getSettings(); // ensure row exists
-	await db.update(userSettings).set(patch).where(eq(userSettings.id, ROW_ID));
+export async function updateSettings(userId: number, patch: Partial<UserSettings>): Promise<void> {
+	await getSettings(userId); // ensure row exists
+	await db.update(userSettings).set(patch).where(eq(userSettings.id, userId));
 }
