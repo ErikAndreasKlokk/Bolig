@@ -30,9 +30,20 @@ export interface FinnListing {
 /** Finn is refusing our requests as a whole, so further ones this run would be refused too. */
 export class FinnBlockedError extends Error {}
 
-function throwIfBlocked(res: Response): void {
-	if (res.status === 403 || res.status === 429)
-		throw new FinnBlockedError(`Finn refused the request: ${res.status} ${res.statusText}`);
+async function throwIfBlocked(res: Response): Promise<void> {
+	if (res.status !== 403 && res.status !== 429) return;
+	// The headers and block page often say what refused us and why. Cookie names only: they can
+	// identify the service, their values are of no use here.
+	const headers = [...res.headers].filter(([name]) => name !== 'set-cookie');
+	const cookies = res.headers.getSetCookie().map((c) => c.split('=', 1)[0]);
+	const body = await res.text().catch(() => '(could not read body)');
+	console.warn('Finn refused the request:', {
+		status: res.status,
+		headers: Object.fromEntries(headers),
+		cookies,
+		body: body.slice(0, 1000)
+	});
+	throw new FinnBlockedError(`Finn refused the request: ${res.status} ${res.statusText}`);
 }
 
 // Same parameters finn.no's own filters put in the URL
@@ -181,7 +192,7 @@ async function fetchPage(
 	const res = await fetch(buildSearchUrl(search, page), {
 		headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' }
 	});
-	throwIfBlocked(res);
+	await throwIfBlocked(res);
 	if (!res.ok) throw new Error(`Finn search failed: ${res.status} ${res.statusText}`);
 	const html = await res.text();
 
@@ -378,7 +389,7 @@ export async function fetchDetails(url: string): Promise<FinnDetails | null> {
 		headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' }
 	});
 	if (res.status === 404 || res.status === 410) return null;
-	throwIfBlocked(res);
+	await throwIfBlocked(res);
 	if (!res.ok) throw new Error(`Finn ad ${url} failed: ${res.status} ${res.statusText}`);
 	const html = await res.text();
 
