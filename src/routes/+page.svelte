@@ -14,6 +14,13 @@
 	let { data }: { data: PageData } = $props();
 
 	const nf = (n: number) => n.toLocaleString('no-NO');
+	const updatedFmt = new Intl.DateTimeFormat('nb-NO', {
+		timeZone: 'Europe/Oslo',
+		day: 'numeric',
+		month: 'short',
+		hour: '2-digit',
+		minute: '2-digit'
+	});
 
 	function formatPrice(n: number | null): string {
 		return n === null ? '–' : `${nf(n)} kr`;
@@ -112,9 +119,12 @@
 	const visibleListings = $derived(data.listings.slice(0, shown));
 
 	// New filters/sort start from the top again; form actions (favorite, hide…) keep the URL
-	// and therefore keep how far you've scrolled.
+	// and therefore keep how far you've scrolled. Goes through $derived because SvelteKit assigns
+	// a new page.url object on every invalidate and Back, even when the URL is the same; a
+	// reset then would shrink the list and make the browser clamp the scroll position upwards.
+	const search = $derived(page.url.search);
 	$effect(() => {
-		void page.url.search;
+		void search;
 		shown = PAGE_SIZE;
 	});
 
@@ -168,7 +178,8 @@
 			<h1 class="text-xl font-bold sm:text-2xl">Boligjakt 🏠</h1>
 			<p class="text-xs text-gray-500 sm:text-sm">
 				{data.searchSummary}{#if data.travelSummary}
-					· reisetid {data.travelSummary}{/if}
+					· reisetid {data.travelSummary}{/if}{#if data.lastUpdated}
+					· oppdatert {updatedFmt.format(data.lastUpdated)}{/if}
 			</p>
 		</div>
 		<nav class="flex flex-wrap items-center gap-2 text-sm">
@@ -217,6 +228,13 @@
 			</form>
 		</nav>
 	</header>
+
+	{#if data.dataStale && data.lastUpdated}
+		<p class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+			Dataene fra Finn ble sist oppdatert {updatedFmt.format(data.lastUpdated)}. Nye boliger,
+			prisendringer og varsler etter det mangler.
+		</p>
+	{/if}
 
 	<!-- Above Leaflet's panes (z-index up to 1000), below the drawer (2000) -->
 	<form

@@ -24,7 +24,7 @@ import {
 } from './db/schema';
 import { USERS, type User } from '$lib/users';
 import { searchKey } from '$lib/search';
-import { fetchAllListings, fetchDetails, type FinnListing } from './finn';
+import { fetchAllListings, fetchDetails, FinnBlockedError, type FinnListing } from './finn';
 import { travelMinutes, geocodeAddress } from './entur';
 import { notifyNewListings, notifyPriceDrops, webhookFor, type PriceDrop } from './discord';
 
@@ -77,23 +77,30 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	const resultsBySearch = new Map<string, FinnListing[] | null>();
 	const union = new Map<string, FinnListing>();
 	const runs: UserRun[] = [];
+	let blocked = false;
 
 	for (const user of USERS) {
 		const settings = settingsById.get(user.id);
-		if (!settings) continue;
+		if (!settings || !user.scrape) continue;
 		if (settings.searchLocations.length === 0) {
 			runs.push({ user, settings, keys: new Set() }); // no search → nothing matches
 			continue;
 		}
 		const key = searchKey(settings);
 		if (!resultsBySearch.has(key)) {
-			try {
-				const found = await fetchAllListings(settings);
-				resultsBySearch.set(key, found);
-				console.log(`Fetched ${found.length} listings from Finn for ${user.name}'s search`);
-			} catch (e) {
-				console.error(`Finn search for ${user.name} failed:`, e);
+			if (blocked) {
 				resultsBySearch.set(key, null);
+			} else {
+				try {
+					const found = await fetchAllListings(settings);
+					resultsBySearch.set(key, found);
+					console.log(`Fetched ${found.length} listings from Finn for ${user.name}'s search`);
+				} catch (e) {
+					// Stop asking as soon as Finn says no, rather than repeating it for every search
+					if (e instanceof FinnBlockedError) blocked = true;
+					console.error(`Finn search for ${user.name} failed:`, e);
+					resultsBySearch.set(key, null);
+				}
 			}
 		}
 		const found = resultsBySearch.get(key) ?? null;
@@ -108,16 +115,19 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	for (const run of runs) {
 		if (run.keys) await updateMatches(run.user.id, [...run.keys], now);
 	}
-	// A listing is active while any user's search still returns it
+	// A listing is active while any scraped user's search still returns it. Matches of users with
+	// scraping turned off are frozen, so they mustn't keep their listings being refreshed from Finn.
+	const scrapedIds = USERS.filter((u) => u.scrape).map((u) => u.id);
 	await db.execute(sql`
 		update ${listings} set active = exists (
-			select 1 from ${listingMatches} m where m.finnkode = ${listings.finnkode} and m.active
+			select 1 from ${listingMatches} m
+			where m.finnkode = ${listings.finnkode} and m.active and m.user_id in ${scrapedIds}
 		)
 	`);
 
 	await geocodeMissing();
 	for (const run of runs) await computeTravel(run.user, run.settings);
-	await enrichDetails(now);
+	if (!blocked) await enrichDetails(now);
 
 	// 4. Per-user Discord notifications
 	const dropRows =
@@ -137,7 +147,7 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	}
 
 	console.log(
-		`Scrape done: ${union.size} listings across ${resultsBySearch.size} searches, ${newKeys.length} new, ${dropKeys.length} price drops`
+		`${blocked ? 'Scrape stopped early, Finn refused our requests' : 'Scrape done'}: ${union.size} listings across ${resultsBySearch.size} searches, ${newKeys.length} new, ${dropKeys.length} price drops`
 	);
 	return { total: union.size, added: newKeys.length };
 }
@@ -451,7 +461,7 @@ async function enrichDetails(now: Date): Promise<void> {
 		} catch (e) {
 			console.error(`Detail fetch for ${finnkode} failed:`, e);
 			// Several in a row usually means we're being rate-limited — try again next run
-			if (++failures >= 3) break;
+			if (e instanceof FinnBlockedError || ++failures >= 3) break;
 		}
 		await pause(800);
 	}

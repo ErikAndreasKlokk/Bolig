@@ -134,8 +134,9 @@ export const actions: Actions = {
 				.set({ travelMinutes: null })
 				.where(eq(listingMatches.userId, user.id));
 		}
-		if (searchChanged || travelChanged) scrapeSoon();
+		const refreshing = user.scrape && (searchChanged || travelChanged);
+		if (refreshing) scrapeSoon();
 
-		return { saved: true, refreshing: searchChanged || travelChanged };
+		return { saved: true, refreshing };
 	}
 };

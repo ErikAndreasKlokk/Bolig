@@ -27,6 +27,14 @@ export interface FinnListing {
 	publishedAt: Date | null;
 }
 
+/** Finn is refusing our requests as a whole, so further ones this run would be refused too. */
+export class FinnBlockedError extends Error {}
+
+function throwIfBlocked(res: Response): void {
+	if (res.status === 403 || res.status === 429)
+		throw new FinnBlockedError(`Finn refused the request: ${res.status} ${res.statusText}`);
+}
+
 // Same parameters finn.no's own filters put in the URL
 export function buildSearchUrl(s: FinnSearch, page = 1): string {
 	const p = new URLSearchParams();
@@ -173,6 +181,7 @@ async function fetchPage(
 	const res = await fetch(buildSearchUrl(search, page), {
 		headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' }
 	});
+	throwIfBlocked(res);
 	if (!res.ok) throw new Error(`Finn search failed: ${res.status} ${res.statusText}`);
 	const html = await res.text();
 
@@ -369,6 +378,7 @@ export async function fetchDetails(url: string): Promise<FinnDetails | null> {
 		headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' }
 	});
 	if (res.status === 404 || res.status === 410) return null;
+	throwIfBlocked(res);
 	if (!res.ok) throw new Error(`Finn ad ${url} failed: ${res.status} ${res.statusText}`);
 	const html = await res.text();
 

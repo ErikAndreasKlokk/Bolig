@@ -1,4 +1,15 @@
-import { eq, asc, and, or, inArray, isNotNull, getTableColumns, sql, type SQL } from 'drizzle-orm';
+import {
+	eq,
+	asc,
+	desc,
+	and,
+	or,
+	inArray,
+	isNotNull,
+	getTableColumns,
+	sql,
+	type SQL
+} from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { listingMatches, listings, listingUserState, priceHistory } from '$lib/server/db/schema';
@@ -26,6 +37,9 @@ const SORTS = {
 	nyeste: 'Nyeste'
 } as const;
 type Sort = keyof typeof SORTS;
+
+// With two scrapes a day, this means at least the last run failed and the data is falling behind
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 function intParam(url: URL, key: string): number | null {
 	const v = url.searchParams.get(key);
@@ -114,6 +128,15 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		)
 		.where(visibility);
 	const settings = await getSettings(user.id);
+
+	// The last time this user's search returned anything from Finn
+	const [latest] = await db
+		.select({ at: listingMatches.lastSeenAt })
+		.from(listingMatches)
+		.where(eq(listingMatches.userId, user.id))
+		.orderBy(desc(listingMatches.lastSeenAt))
+		.limit(1);
+	const lastUpdated = latest?.at ?? null;
 
 	const all = rows.map((l) => ({
 		...l,
@@ -216,6 +239,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		user: { key: user.key, name: user.name },
 		searchSummary: describeSearch(settings),
 		hasSearch: settings.searchLocations.length > 0,
+		lastUpdated,
+		dataStale: lastUpdated !== null && Date.now() - lastUpdated.getTime() > STALE_AFTER_MS,
 		travelSummary: settings.workAddress
 			? `${TRAVEL_MODES[settings.travelMode].toLowerCase()} til ${settings.workAddress}`
 			: null,

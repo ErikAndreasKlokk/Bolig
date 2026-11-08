@@ -17,10 +17,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 	return resolve(event);
 };
 
-// Scrape once at the top of each hour, daytime only — there's no point hammering
-// Finn at night. Inclusive range: runs at 10:00, 11:00, … 16:00 Oslo time.
-const FIRST_HOUR = 10;
-const LAST_HOUR = 16;
+// Scrape twice a day, Oslo time: once in the morning and once in the afternoon.
+const SCRAPE_HOURS = [8, 16];
 
 // The container is node:alpine without tzdata, so TZ=Europe/Oslo is ignored and
 // Date.getHours() returns UTC. Derive the real Oslo hour via Intl (Node's bundled
@@ -35,19 +33,18 @@ function osloHour(d: Date): number {
 	);
 }
 
-function inWindow(d: Date): boolean {
-	const h = osloHour(d);
-	return h >= FIRST_HOUR && h <= LAST_HOUR;
+function isScrapeHour(d: Date): boolean {
+	return SCRAPE_HOURS.includes(osloHour(d));
 }
 
-// ms from `now` until the next top-of-hour that falls inside the daytime window.
+// ms from `now` until the next top-of-hour that is a scrape hour.
 // Top-of-hour is aligned in UTC, which coincides with Oslo's (whole-hour offset).
 function msUntilNextRun(now: Date): number {
 	const next = new Date(now);
 	next.setMinutes(0, 0, 0);
 	next.setHours(next.getHours() + 1); // the upcoming top of the hour
-	// Skip evenings/nights — advancing one hour at a time wraps across days correctly.
-	while (!inWindow(next)) {
+	// Advancing one hour at a time wraps across days correctly.
+	while (!isScrapeHour(next)) {
 		next.setHours(next.getHours() + 1);
 	}
 	return next.getTime() - now.getTime();
@@ -67,22 +64,18 @@ const migrated: Promise<boolean> = building
 				}
 			);
 
-async function scrape(label: string): Promise<void> {
+async function scrape(): Promise<void> {
 	if (!(await migrated)) return;
-	await runScrape().catch((e) => console.error(`${label} scrape failed:`, e));
+	await runScrape().catch((e) => console.error('Scheduled scrape failed:', e));
 }
 
 function scheduleNext(): void {
 	const delay = msUntilNextRun(new Date());
 	setTimeout(() => {
-		void scrape('Scheduled');
+		void scrape();
 		scheduleNext();
 	}, delay);
 }
 
-if (!building) {
-	// Populate right away on boot, but only if we're already within the daytime window
-	// (so a deploy in the evening doesn't kick off a scrape outside the intended hours).
-	if (inWindow(new Date())) setTimeout(() => void scrape('Initial'), 10_000);
-	scheduleNext();
-}
+// No scrape on boot, so restarts and deploys don't add runs on top of the two a day
+if (!building) scheduleNext();
