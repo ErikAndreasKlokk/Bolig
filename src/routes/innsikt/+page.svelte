@@ -74,7 +74,7 @@
 		<div>
 			<h1 class="text-3xl font-bold">📊 Innsikt</h1>
 			<p class="mt-1 text-sm text-gray-500">
-				Hvor fort ting forsvinner fra Finn, og hva det koster per m², per område.
+				Hvor fort ting forsvinner fra hjem.no, og hva det koster per m², per område.
 				{#if data.trackingStart}Data fra {dateFmt.format(data.trackingStart)}{/if}
 			</p>
 		</div>
@@ -82,7 +82,7 @@
 	</header>
 
 	<section class="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-		{#each [{ label: 'Aktive nå', value: nf(data.summary.active) }, { label: `Borte siste ${data.recentDays} d`, value: nf(data.summary.removed) }, { label: 'Median dager på Finn', value: nf(data.summary.medianDays, ' d') }, { label: 'Median kr/m² (aktive)', value: nf(data.summary.medianPpm) }] as tile (tile.label)}
+		{#each [{ label: 'Aktive nå', value: nf(data.summary.active) }, { label: `Borte siste ${data.recentDays} d`, value: nf(data.summary.removed) }, { label: 'Median dager ute', value: nf(data.summary.medianDays, ' d') }, { label: 'Median kr/m² (aktive)', value: nf(data.summary.medianPpm) }] as tile (tile.label)}
 			<div class="rounded-xl border border-gray-200 bg-white p-4">
 				<div class="text-xs text-gray-500">{tile.label}</div>
 				<div class="mt-1 text-2xl font-semibold tabular-nums">{tile.value}</div>
@@ -154,15 +154,16 @@
 			</table>
 		</div>
 		<p class="mt-2 text-xs text-gray-400">
-			Tallene gjelder boligene ditt eget søk har funnet. «Borte» betyr at annonsen forsvant fra Finn
-			— oftest solgt, men kan også være trukket eller prisjustert ut av søket. Boliger som lå ute
-			før søket ditt startet er holdt utenfor median dager (vi vet ikke når de ble lagt ut). Område
-			hentes fra annonsen, så nye boliger kan stå med poststed til detaljene er hentet.
+			Tallene gjelder boligene ditt eget søk har funnet på hjem.no. «Borte» betyr at annonsen
+			forsvant fra hjem.no — oftest solgt, men kan også være trukket eller prisjustert ut av søket.
+			Boliger som lå ute før søket ditt startet er holdt utenfor median dager (vi vet ikke når de
+			ble lagt ut). Område hentes fra annonsen, så nye boliger kan stå med poststed til detaljene er
+			hentet. Boligene fra Finn-tiden er ikke med.
 		</p>
 	</section>
 
 	<section>
-		<h2 class="mb-2 font-semibold">Nylig borte fra Finn</h2>
+		<h2 class="mb-2 font-semibold">Nylig borte fra hjem.no</h2>
 		{#if data.recent.length === 0}
 			<p class="text-sm text-gray-500">Ingen enda.</p>
 		{:else}

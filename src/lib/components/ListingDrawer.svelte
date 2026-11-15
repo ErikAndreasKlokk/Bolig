@@ -15,6 +15,7 @@
 	import {
 		formatViewing,
 		LISTING_STATUSES,
+		sourceName,
 		STATUS_LABELS,
 		type ListingStatus,
 		type Viewing
@@ -195,7 +196,9 @@
 					<div class="flex items-start justify-between gap-3">
 						<h2 class="text-lg leading-snug font-semibold">{listing.heading}</h2>
 						{#if !listing.active}
-							<span class="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-xs">borte fra Finn</span>
+							<span class="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-xs"
+								>borte fra {sourceName(listing.finnkode)}</span
+							>
 						{/if}
 					</div>
 					<div class="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -241,7 +244,7 @@
 						rel="external noopener noreferrer"
 						class="inline-flex min-h-10 items-center rounded-lg bg-blue-600 px-4 font-medium text-white hover:bg-blue-700"
 					>
-						Se på Finn ↗
+						Se på {sourceName(listing.finnkode)} ↗
 					</a>
 					<form method="POST" action="?/favorite" use:enhance>
 						<input type="hidden" name="finnkode" value={listing.finnkode} />
@@ -317,7 +320,7 @@
 
 				{#if loadError}
 					<p class="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">
-						Klarte ikke å hente detaljer fra Finn akkurat nå.
+						Klarte ikke å hente detaljer fra {sourceName(listing.finnkode)} akkurat nå.
 					</p>
 				{:else if !detail}
 					<div class="space-y-2" aria-hidden="true">

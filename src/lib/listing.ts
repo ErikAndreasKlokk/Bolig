@@ -1,5 +1,19 @@
 // Listing types/constants shared by server and client (no server-only imports here).
 
+/**
+ * Listings are keyed by the source's own id (the column is still called `finnkode`). Rows from
+ * before the switch to hjem.no carry Finn's numeric finnkode; hjem.no ids are 24 hex characters.
+ * Finn rows are frozen history: nothing refreshes them any more.
+ */
+export function isFinnListing(key: string): boolean {
+	return /^\d{1,12}$/.test(key);
+}
+
+/** Where the ad lives, for link texts and badges */
+export function sourceName(key: string): 'Finn' | 'hjem.no' {
+	return isFinnListing(key) ? 'Finn' : 'hjem.no';
+}
+
 export interface Viewing {
 	start: string; // ISO timestamp (UTC)
 	end: string | null;
@@ -41,8 +55,8 @@ export function isListingStatus(s: unknown): s is ListingStatus {
 }
 
 /**
- * Area used for grouping/filtering: Finn's bydel in Oslo, else the municipality (both from the
- * detail page). Before the details are fetched, fall back to the address' post town.
+ * Area used for grouping/filtering: the bydel in Oslo, else the municipality (both from the
+ * detail record). Before the details are fetched, fall back to the address' post town.
  */
 export function areaOf(l: { district: string | null; localArea: string | null }): string | null {
 	return l.district ?? l.localArea ?? null;

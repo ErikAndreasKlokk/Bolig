@@ -5,15 +5,14 @@ import { listingMatches } from '$lib/server/db/schema';
 import { getSettings, updateSettings } from '$lib/server/settings';
 import { requireUser } from '$lib/server/auth';
 import { geocodeAddress } from '$lib/server/entur';
-import { buildSearchUrl } from '$lib/server/finn';
 import { runScrape } from '$lib/server/scraper';
-import { FINN_COUNTIES } from '$lib/locations';
 import {
+	cleanLocations,
 	OWNERSHIP_TYPES,
 	PROPERTY_TYPES,
 	searchKey,
 	TRAVEL_MODES,
-	type FinnSearch,
+	type ListingSearch,
 	type TravelMode
 } from '$lib/search';
 import type { Actions, PageServerLoad } from './$types';
@@ -21,11 +20,7 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ locals }) => {
 	const user = requireUser(locals);
 	const settings = await getSettings(user.id);
-	return {
-		settings,
-		userName: user.name,
-		finnUrl: settings.searchLocations.length > 0 ? buildSearchUrl(settings) : null
-	};
+	return { settings, userName: user.name };
 };
 
 function num(v: FormDataEntryValue | null, fallback: number): number {
@@ -38,17 +33,6 @@ function num(v: FormDataEntryValue | null, fallback: number): number {
 function optInt(v: FormDataEntryValue | null): number | null {
 	const n = Number(String(v ?? '').replace(/[^\d]/g, ''));
 	return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
-}
-
-const countyCodes = new Set(FINN_COUNTIES.map((c) => c.code));
-const childToCounty = new Map(
-	FINN_COUNTIES.flatMap((c) => c.children.map((m) => [m.code, c.code] as const))
-);
-
-// Known codes only; a whole county makes its own municipalities redundant
-function cleanLocations(raw: string[]): string[] {
-	const codes = [...new Set(raw)].filter((c) => countyCodes.has(c) || childToCounty.has(c));
-	return codes.filter((c) => !codes.includes(childToCounty.get(c) ?? ''));
 }
 
 const onlyValid = (raw: string[], options: readonly { value: string }[]) =>
@@ -84,7 +68,7 @@ export const actions: Actions = {
 		const current = await getSettings(user.id);
 
 		const minBedrooms = optInt(data.get('minBedrooms'));
-		const search: FinnSearch = {
+		const search: ListingSearch = {
 			searchLocations: cleanLocations(data.getAll('location').map(String)),
 			priceFrom: optInt(data.get('priceFrom')),
 			priceTo: optInt(data.get('priceTo')),

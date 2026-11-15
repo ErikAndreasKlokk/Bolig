@@ -3,27 +3,27 @@ import { asc, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { listings, priceHistory } from '$lib/server/db/schema';
 import { refreshDetails } from '$lib/server/scraper';
-import type { ListingDetail } from '$lib/listing';
+import { isFinnListing, type ListingDetail } from '$lib/listing';
 
 const detailColumns = {
-	url: listings.url,
 	active: listings.active,
+	detailsFetchedAt: listings.detailsFetchedAt,
 	images: listings.images,
 	facts: listings.facts,
 	description: listings.description,
 	facilities: listings.facilities
 };
 
-// Drawer data for one listing. If the scraper hasn't reached it yet, fetch the ad page now
-// so opening a listing never shows an empty drawer.
+// Drawer data for one listing. If the scraper hasn't reached it yet, fetch its details now so
+// opening a listing never shows a half-empty drawer. (Finn rows are never fetched again.)
 export async function GET({ params }) {
 	const where = eq(listings.finnkode, params.finnkode);
 	let [row] = await db.select(detailColumns).from(listings).where(where);
 	if (!row) error(404, 'Ukjent bolig');
 
-	if (row.images === null && row.active) {
+	if (row.detailsFetchedAt === null && row.active && !isFinnListing(params.finnkode)) {
 		try {
-			await refreshDetails(params.finnkode, row.url);
+			await refreshDetails(params.finnkode);
 			[row] = await db.select(detailColumns).from(listings).where(where);
 		} catch (e) {
 			console.error(`On-demand detail fetch for ${params.finnkode} failed:`, e);

@@ -43,16 +43,9 @@
 
 	<form method="POST" action="?/search" use:enhance={keepValues} class="mb-10 space-y-6">
 		<section class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-			<div class="mb-3 flex items-baseline justify-between gap-3">
+			<div class="mb-3">
 				<h2 class="font-semibold text-gray-800">Hva leter du etter?</h2>
-				{#if data.finnUrl}
-					<a
-						href={data.finnUrl}
-						target="_blank"
-						rel="external noopener noreferrer"
-						class="shrink-0 text-sm text-blue-600 hover:underline">Se søket på Finn ↗</a
-					>
-				{/if}
+				<p class="mt-0.5 text-sm text-gray-500">Boligene hentes fra hjem.no én gang om dagen.</p>
 			</div>
 
 			<h3 class="mb-2 text-sm font-medium text-gray-700">Områder</h3>
@@ -173,7 +166,7 @@
 		{:else if form && 'saved' in form && form.saved}
 			<p class="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800" role="status">
 				{form.refreshing
-					? 'Lagret. Henter boliger fra Finn nå — det kan ta noen minutter før alt er på plass.'
+					? 'Lagret. Henter boliger fra hjem.no nå — det kan ta noen minutter før alt er på plass.'
 					: 'Lagret.'}
 			</p>
 		{/if}

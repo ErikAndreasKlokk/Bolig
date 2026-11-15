@@ -23,8 +23,10 @@ import {
 	type UserSettings
 } from './db/schema';
 import { USERS, type User } from '$lib/users';
+import { isFinnListing } from '$lib/listing';
 import { searchKey } from '$lib/search';
-import { fetchAllListings, fetchDetails, FinnBlockedError, type FinnListing } from './finn';
+import { fetchAllListings, fetchDetails, SourceBlockedError, type SourceListing } from './hjem';
+import { carryOverFinnState } from './finnMigration';
 import { travelMinutes, geocodeAddress } from './entur';
 import { notifyNewListings, notifyPriceDrops, webhookFor, type PriceDrop } from './discord';
 
@@ -70,12 +72,12 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	console.log('Scrape started');
 	const now = new Date();
 
-	// 1. Run each user's own Finn search — once per distinct search, since several users may
-	//    have identical criteria
+	// 1. Run each user's own search — once per distinct search, since several users may have
+	//    identical criteria
 	const settingsRows = await db.select().from(userSettings);
 	const settingsById = new Map(settingsRows.map((s) => [s.id, s]));
-	const resultsBySearch = new Map<string, FinnListing[] | null>();
-	const union = new Map<string, FinnListing>();
+	const resultsBySearch = new Map<string, SourceListing[] | null>();
+	const union = new Map<string, SourceListing>();
 	const runs: UserRun[] = [];
 	let blocked = false;
 
@@ -94,11 +96,11 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 				try {
 					const found = await fetchAllListings(settings);
 					resultsBySearch.set(key, found);
-					console.log(`Fetched ${found.length} listings from Finn for ${user.name}'s search`);
+					console.log(`Fetched ${found.length} listings from hjem.no for ${user.name}'s search`);
 				} catch (e) {
-					// Stop asking as soon as Finn says no, rather than repeating it for every search
-					if (e instanceof FinnBlockedError) blocked = true;
-					console.error(`Finn search for ${user.name} failed:`, e);
+					// Stop asking as soon as hjem.no says no, rather than repeating it for every search
+					if (e instanceof SourceBlockedError) blocked = true;
+					console.error(`hjem.no search for ${user.name} failed:`, e);
 					resultsBySearch.set(key, null);
 				}
 			}
@@ -110,13 +112,15 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 
 	// 2. Upsert the listings themselves (shared by everyone), tracking price changes
 	const { newKeys, dropKeys } = await upsertListings([...union.values()], now);
+	// Favorites/notes from the Finn days follow the home to its hjem.no listing
+	await carryOverFinnState(newKeys);
 
 	// 3. Record which listings each user's search returned
 	for (const run of runs) {
 		if (run.keys) await updateMatches(run.user.id, [...run.keys], now);
 	}
 	// A listing is active while any scraped user's search still returns it. Matches of users with
-	// scraping turned off are frozen, so they mustn't keep their listings being refreshed from Finn.
+	// scraping turned off are frozen, so they mustn't keep their listings being refreshed.
 	const scrapedIds = USERS.filter((u) => u.scrape).map((u) => u.id);
 	await db.execute(sql`
 		update ${listings} set active = exists (
@@ -147,7 +151,7 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 	}
 
 	console.log(
-		`${blocked ? 'Scrape stopped early, Finn refused our requests' : 'Scrape done'}: ${union.size} listings across ${resultsBySearch.size} searches, ${newKeys.length} new, ${dropKeys.length} price drops`
+		`${blocked ? 'Scrape stopped early, hjem.no refused our requests' : 'Scrape done'}:${union.size} listings across ${resultsBySearch.size} searches, ${newKeys.length} new, ${dropKeys.length} price drops`
 	);
 	return { total: union.size, added: newKeys.length };
 }
@@ -155,7 +159,7 @@ async function doScrape(): Promise<{ total: number; added: number }> {
 type DropKey = { finnkode: string; oldPrice: number; newPrice: number };
 
 async function upsertListings(
-	fetched: FinnListing[],
+	fetched: SourceListing[],
 	now: Date
 ): Promise<{ newKeys: string[]; dropKeys: DropKey[] }> {
 	const existing = await db
@@ -174,8 +178,8 @@ async function upsertListings(
 	for (const l of fetched) {
 		const prev = existingMap.get(l.finnkode);
 		if (prev) {
-			// A scrape can miss a field (Finn's markup varies) and return null where we
-			// previously had a value. Keep the known price instead of wiping it — otherwise the
+			// A scrape can miss a field (the source leaves it out now and then) and return null
+			// where we previously had a value. Keep the known price instead of wiping it — otherwise the
 			// effective price falls back to the (lower) prisantydning and looks like a price drop.
 			const newTotal = l.priceTotal ?? prev.priceTotal;
 			const newSuggestion = l.priceSuggestion ?? prev.priceSuggestion;
@@ -212,6 +216,10 @@ async function upsertListings(
 					priceSuggestion: newSuggestion,
 					sharedCost: l.sharedCost,
 					imageUrl: l.imageUrl,
+					// The search carries the current viewings, so they stay fresh without a detail fetch
+					viewings: l.viewings,
+					// Oslo's bydel comes from the search; undefined leaves the stored one alone
+					district: l.district ?? undefined,
 					lastSeenAt: now
 				})
 				.where(eq(listings.finnkode, l.finnkode));
@@ -401,45 +409,60 @@ async function notifyUser(
 	}
 }
 
-/** Fetch one ad's detail page and store it. A gone ad (404) is marked fetched with no data. */
-export async function refreshDetails(finnkode: string, url: string, now = new Date()) {
-	const d = await fetchDetails(url);
+/**
+ * Fetch one listing's full record and store it. When hjem.no has nothing for it, keep what the
+ * search gave us and just mark it fetched, so it isn't retried every time.
+ */
+export async function refreshDetails(key: string, now = new Date()) {
+	if (isFinnListing(key)) return; // frozen history — Finn isn't asked any more
+	const d = await fetchDetails(key);
 	await db
 		.update(listings)
 		.set(
 			d
-				? { ...d, detailsFetchedAt: now }
-				: { viewings: [], images: [], facts: [], facilities: [], detailsFetchedAt: now }
+				? // No district (Oslo) keeps the bydel the search tagged it with
+					{ ...d, district: d.district ?? undefined, detailsFetchedAt: now }
+				: {
+						images: sql`coalesce(${listings.images}, '[]'::jsonb)`,
+						facts: sql`coalesce(${listings.facts}, '[]'::jsonb)`,
+						facilities: sql`coalesce(${listings.facilities}, '[]'::jsonb)`,
+						detailsFetchedAt: now
+					}
 		)
-		.where(eq(listings.finnkode, finnkode));
+		.where(eq(listings.finnkode, key));
 }
 
-// Detail pages cost one request each, so spread them over runs.
-const DETAIL_BUDGET = 150;
+// Detail records cost one request each, so spread them over runs. One run a day, so this is the
+// same daily total as the 2 × 150 of the Finn days.
+const DETAIL_BUDGET = 300;
 // Viewings get added/changed after publication, so re-fetch relevant listings this often.
 const DETAIL_REFRESH_MS = 20 * 60 * 60 * 1000;
 // Refreshing every listing daily would be too many requests; viewings are mostly scheduled in
 // the first couple of weeks, so only keep refreshing recent listings and the ones you follow.
 const REFRESH_RECENT_MS = 14 * 24 * 60 * 60 * 1000;
 
-// Pull bedrooms, district and viewings from each ad's detail page. Never-fetched listings go
-// first (newest first, so this run's new listings are enriched before they're notified), then
-// the stalest relevant ones.
+// Pull district, facts, description and facilities from each listing's detail record.
+// Never-fetched listings go first (newest first, so this run's new listings are enriched before
+// they're notified), then the stalest relevant ones.
 async function enrichDetails(now: Date): Promise<void> {
 	const staleBefore = new Date(now.getTime() - DETAIL_REFRESH_MS);
 	const recentAfter = new Date(now.getTime() - REFRESH_RECENT_MS);
 	const due = await db
-		.select({ finnkode: listings.finnkode, url: listings.url })
+		.select({ finnkode: listings.finnkode })
 		.from(listings)
 		.where(
-			or(
-				isNull(listings.detailsFetchedAt),
-				// Enriched before photos/facts were stored — backfill once
-				and(eq(listings.active, true), isNull(listings.images)),
-				and(
-					eq(listings.active, true),
-					lt(listings.detailsFetchedAt, staleBefore),
-					or(followedBySomeone, and(not(hiddenByEveryone), gt(listings.firstSeenAt, recentAfter)))
+			and(
+				// Finn rows are frozen history
+				sql`${listings.finnkode} !~ '^[0-9]{1,12}$'`,
+				or(
+					isNull(listings.detailsFetchedAt),
+					// Enriched before photos/facts were stored — backfill once
+					and(eq(listings.active, true), isNull(listings.images)),
+					and(
+						eq(listings.active, true),
+						lt(listings.detailsFetchedAt, staleBefore),
+						or(followedBySomeone, and(not(hiddenByEveryone), gt(listings.firstSeenAt, recentAfter)))
+					)
 				)
 			)
 		)
@@ -453,15 +476,15 @@ async function enrichDetails(now: Date): Promise<void> {
 
 	let ok = 0;
 	let failures = 0;
-	for (const { finnkode, url } of due) {
+	for (const { finnkode } of due) {
 		try {
-			await refreshDetails(finnkode, url, now);
+			await refreshDetails(finnkode, now);
 			ok++;
 			failures = 0;
 		} catch (e) {
 			console.error(`Detail fetch for ${finnkode} failed:`, e);
 			// Several in a row usually means we're being rate-limited — try again next run
-			if (e instanceof FinnBlockedError || ++failures >= 3) break;
+			if (e instanceof SourceBlockedError || ++failures >= 3) break;
 		}
 		await pause(800);
 	}

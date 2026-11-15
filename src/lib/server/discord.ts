@@ -58,7 +58,7 @@ export async function notifyNewListings(webhookUrl: string, listings: Listing[])
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
-				content: `🏠 ${batch.length} ny${batch.length > 1 ? 'e' : ''} bolig${batch.length > 1 ? 'er' : ''} på Finn!`,
+				content: `🏠 ${batch.length} ny${batch.length > 1 ? 'e' : ''} bolig${batch.length > 1 ? 'er' : ''} på hjem.no!`,
 				embeds
 			})
 		});
@@ -111,7 +111,7 @@ export async function notifyPriceDrops(webhookUrl: string, drops: PriceDrop[]): 
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
-				content: `📉 ${batch.length} prisfall på Finn!`,
+				content: `📉 ${batch.length} prisfall på hjem.no!`,
 				embeds
 			})
 		});

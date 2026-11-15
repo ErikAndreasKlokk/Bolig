@@ -1,6 +1,6 @@
 // The people using the site. `id` is the key for per-user rows (user_settings.id,
 // listing_user_state.user_id) — never renumber. Erik is 1 because the original single-user
-// settings row had id 1. `scrape: false` turns off a user's Finn search and notifications but
+// settings row had id 1. `scrape: false` turns off a user's search and notifications but
 // keeps their saved search and current listings, so flipping it back resumes where it left off.
 
 export const USERS = [

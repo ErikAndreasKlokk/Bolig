@@ -13,7 +13,8 @@
 	// A horizontal drag this far (at 1×) flips to the next/previous photo
 	const SWIPE_PX = 60;
 
-	// Finn's CDN has a larger rendition than the carousel's 1280w; fall back if it's missing
+	// Finn's CDN (old listings) has a larger rendition than the carousel's 1280w; fall back if it's
+	// missing. hjem.no's URLs don't contain /1280w/, so they're used as they are.
 	const largeUrl = (url: string) => url.replace('/1280w/', '/1600w/');
 	const failedLarge = new SvelteSet<string>();
 	const src = $derived.by(() => {

@@ -26,7 +26,7 @@ export const userSettings = pgTable('user_settings', {
 	loanYears: integer('loan_years').notNull().default(30),
 	minEquityPct: integer('min_equity_pct').notNull().default(10),
 
-	// This user's Finn search (see $lib/search). No locations = no search.
+	// This user's hjem.no search (see $lib/search). No locations = no search.
 	searchLocations: jsonb('search_locations').$type<string[]>().notNull().default([]),
 	priceFrom: integer('price_from'),
 	priceTo: integer('price_to'),
@@ -48,6 +48,8 @@ export const userSettings = pgTable('user_settings', {
 export type UserSettings = typeof userSettings.$inferSelect;
 
 export const listings = pgTable('listings', {
+	// The listing's id at its source: hjem.no's id, or Finn's finnkode for rows from before the
+	// switch (see isFinnListing). Kept under the old name — renaming it would rebuild the column.
 	finnkode: text('finnkode').primaryKey(),
 	heading: text('heading').notNull(),
 	address: text('address'),
@@ -75,7 +77,7 @@ export const listings = pgTable('listings', {
 	hidden: boolean('hidden').notNull().default(false),
 	favorite: boolean('favorite').notNull().default(false),
 	notifiedAt: timestamp('notified_at'),
-	// From the ad detail page (the search card doesn't carry them) — see finn.fetchDetails
+	// From the detail record (the search result doesn't carry them) — see hjem.fetchDetails
 	district: text('district'),
 	rooms: integer('rooms'),
 	floor: integer('floor'),
@@ -113,7 +115,7 @@ export const listingUserState = pgTable(
 
 export type ListingUserState = typeof listingUserState.$inferSelect;
 
-// Which listings each user's own Finn search returned. `active` = still in their results; the
+// Which listings each user's own search returned. `active` = still in their results; the
 // listing itself (listings.active) is active while any user's search still returns it.
 export const listingMatches = pgTable(
 	'listing_matches',

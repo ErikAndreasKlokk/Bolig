@@ -1,29 +1,30 @@
-// Per-user Finn search criteria, shared by the settings page (client) and the scraper (server).
-// Option values are Finn's own, read from the filter data on finn.no/realestate/homes/search.html.
-import { FINN_COUNTIES } from './locations';
+// Per-user search criteria, shared by the settings page (client) and the scraper (server).
+// Option values are hjem.no's own (the `property_type`/`owner_type` values its search sends).
+import { COUNTIES } from './locations';
 
 export const PROPERTY_TYPES = [
-	{ value: '3', label: 'Leilighet' },
-	{ value: '1', label: 'Enebolig' },
-	{ value: '2', label: 'Tomannsbolig' },
-	{ value: '4', label: 'Rekkehus' },
-	{ value: '11', label: 'Gårdsbruk/Småbruk' },
-	{ value: '20', label: 'Bygård/Flermannsbolig' },
-	{ value: '18', label: 'Andre' }
+	{ value: 'apartment', label: 'Leilighet' },
+	{ value: 'single_dwelling', label: 'Enebolig' },
+	{ value: 'twin_dwelling', label: 'Tomannsbolig' },
+	{ value: 'townhouse', label: 'Rekkehus' },
+	{ value: 'farm', label: 'Gårdsbruk/Småbruk' },
+	{ value: 'plot', label: 'Tomt' },
+	{ value: 'others', label: 'Annet' }
 ] as const;
 
 export const OWNERSHIP_TYPES = [
-	{ value: '3', label: 'Selveier' },
-	{ value: '4', label: 'Andel' },
-	{ value: '2', label: 'Aksje' },
-	{ value: '1', label: 'Obligasjon' }
+	{ value: 'freehold', label: 'Selveier' },
+	{ value: 'share', label: 'Andel' },
+	{ value: 'stock', label: 'Aksje' },
+	{ value: 'cooperative', label: 'Obligasjon' }
 ] as const;
 
 export const TRAVEL_MODES = { transit: 'Kollektivt', car: 'Bil' } as const;
 export type TravelMode = keyof typeof TRAVEL_MODES;
 export const TRAVEL_ICONS: Record<TravelMode, string> = { transit: '🚇', car: '🚗' };
 
-export interface FinnSearch {
+export interface ListingSearch {
+	/** Location codes from $lib/locations, e.g. "oslo" or "akershus/bærum" */
 	searchLocations: string[];
 	priceFrom: number | null;
 	priceTo: number | null;
@@ -34,7 +35,7 @@ export interface FinnSearch {
 }
 
 const locationNames = new Map<string, string>(
-	FINN_COUNTIES.flatMap((c) => [
+	COUNTIES.flatMap((c) => [
 		[c.code, c.name] as const,
 		...c.children.map((m) => [m.code, m.name] as const)
 	])
@@ -44,11 +45,23 @@ export function locationName(code: string): string {
 	return locationNames.get(code) ?? code;
 }
 
+/** A county code has no "/" (municipalities and districts do). */
+export const isCounty = (code: string) => !code.includes('/');
+
+// "akershus" covers "akershus/bærum", which covers "akershus/bærum/<district>"
+const covers = (outer: string, inner: string) => inner.startsWith(outer + '/');
+
+/** Known codes only, without any already covered by a wider one that's also selected. */
+export function cleanLocations(raw: string[]): string[] {
+	const codes = [...new Set(raw)].filter((c) => locationNames.has(c));
+	return codes.filter((c) => !codes.some((o) => covers(o, c)));
+}
+
 const mill = (n: number) =>
 	(n / 1_000_000).toLocaleString('nb-NO', { maximumFractionDigits: 1 }).replace(/,0$/, '');
 
 /** e.g. "3–5 mill. kr i Oslo og Bærum" — for subtitles. */
-export function describeSearch(s: FinnSearch): string {
+export function describeSearch(s: ListingSearch): string {
 	if (s.searchLocations.length === 0) return 'Ingen søk satt opp ennå';
 	const names = s.searchLocations.map(locationName);
 	const places =
@@ -62,8 +75,8 @@ export function describeSearch(s: FinnSearch): string {
 	return price + places;
 }
 
-/** Same criteria → same Finn results, so users with identical searches share one fetch. */
-export function searchKey(s: FinnSearch): string {
+/** Same criteria → same results, so users with identical searches share one fetch. */
+export function searchKey(s: ListingSearch): string {
 	const sorted = (xs: string[]) => [...xs].sort().join(',');
 	return [
 		sorted(s.searchLocations),

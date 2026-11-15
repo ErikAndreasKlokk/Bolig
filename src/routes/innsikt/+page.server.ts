@@ -1,8 +1,8 @@
-import { and, asc, eq, min } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { listingMatches, listings, listingUserState, priceHistory } from '$lib/server/db/schema';
 import { requireUser } from '$lib/server/auth';
-import { areaOf, effectivePrice, pricePerM2 } from '$lib/listing';
+import { areaOf, effectivePrice, isFinnListing, pricePerM2 } from '$lib/listing';
 import type { PageServerLoad } from './$types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -17,15 +17,19 @@ function median(xs: number[]): number | null {
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const user = requireUser(locals);
-	// The market your own search covers. "Gone" means gone from Finn (no search returns it any
+	// The market your own search covers. "Gone" means gone from hjem.no (no search returns it any
 	// more), not just out of your criteria — so active/lastSeenAt come from the listing itself.
+	// Finn listings are left out: they all stopped being seen when we switched sources, which says
+	// nothing about the market, and the two sites' numbers don't mix.
 	const rows = (
 		await db
 			.select({ listing: listings, firstSeenAt: listingMatches.firstSeenAt })
 			.from(listingMatches)
 			.innerJoin(listings, eq(listings.finnkode, listingMatches.finnkode))
 			.where(eq(listingMatches.userId, user.id))
-	).map((r) => ({ ...r.listing, firstSeenAt: r.firstSeenAt }));
+	)
+		.filter((r) => !isFinnListing(r.listing.finnkode))
+		.map((r) => ({ ...r.listing, firstSeenAt: r.firstSeenAt }));
 	const favorites = new Set(
 		(
 			await db
@@ -34,10 +38,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				.where(and(eq(listingUserState.userId, user.id), eq(listingUserState.favorite, true)))
 		).map((r) => r.finnkode)
 	);
-	const [{ trackingStart }] = await db
-		.select({ trackingStart: min(listingMatches.firstSeenAt) })
-		.from(listingMatches)
-		.where(eq(listingMatches.userId, user.id));
+	const trackingStart =
+		rows.length > 0 ? new Date(Math.min(...rows.map((r) => r.firstSeenAt.getTime()))) : null;
 
 	// First and last observed price per listing
 	const hist = await db
@@ -54,7 +56,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		if (p !== null && !firstPrice.has(h.finnkode)) firstPrice.set(h.finnkode, p);
 	}
 
-	// Listings already on Finn when tracking began have an unknown start date, so their
+	// Listings already on hjem.no when tracking began have an unknown start date, so their
 	// time on market is only a lower bound — flag them and keep them out of the medians.
 	const censoredBefore = trackingStart ? trackingStart.getTime() + 2 * 60 * 60 * 1000 : 0;
 	const now = Date.now();

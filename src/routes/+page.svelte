@@ -6,7 +6,13 @@
 	import { MediaQuery } from 'svelte/reactivity';
 	import ListingMap from '$lib/components/ListingMap.svelte';
 	import ListingDrawer from '$lib/components/ListingDrawer.svelte';
-	import { formatViewing, LISTING_STATUSES, STATUS_LABELS, type ListingStatus } from '$lib/listing';
+	import {
+		formatViewing,
+		LISTING_STATUSES,
+		sourceName,
+		STATUS_LABELS,
+		type ListingStatus
+	} from '$lib/listing';
 	import { TRAVEL_ICONS } from '$lib/search';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData } from './$types';
@@ -231,7 +237,7 @@
 
 	{#if data.dataStale && data.lastUpdated}
 		<p class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-			Dataene fra Finn ble sist oppdatert {updatedFmt.format(data.lastUpdated)}. Nye boliger,
+			Dataene fra hjem.no ble sist oppdatert {updatedFmt.format(data.lastUpdated)}. Nye boliger,
 			prisendringer og varsler etter det mangler.
 		</p>
 	{/if}
@@ -442,7 +448,7 @@
 					<p class="mt-1 text-sm text-blue-800">
 						Velg områder og pris i
 						<a href={resolve('/settings')} class="font-medium underline">Innstillinger</a>, så
-						henter vi boliger fra Finn med en gang.
+						henter vi boliger fra hjem.no med en gang.
 					</p>
 				</div>
 			{:else if data.listings.length === 0}
@@ -514,7 +520,7 @@
 								{l.address ?? l.localArea ?? ''}
 								{#if l.district}<span class="text-gray-400"> · {l.district}</span>{/if}
 								{#if !l.active}<span class="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-xs"
-										>borte fra Finn</span
+										>borte fra {sourceName(l.finnkode)}</span
 									>{/if}
 							</p>
 
@@ -681,7 +687,7 @@
 								target="_blank"
 								rel="external noopener noreferrer"
 								class="flex h-10 flex-1 items-center justify-center rounded-lg border border-gray-200 px-2 text-blue-600 hover:bg-blue-50 sm:flex-none"
-								title="Åpne annonsen på Finn">Finn ↗</a
+								title="Åpne annonsen på {sourceName(l.finnkode)}">{sourceName(l.finnkode)} ↗</a
 							>
 						</div>
 					</li>

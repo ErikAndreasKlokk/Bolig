@@ -3,6 +3,7 @@ import { error, redirect, type Handle } from '@sveltejs/kit';
 import { runScrape } from '$lib/server/scraper';
 import { SESSION_COOKIE, userFromSession } from '$lib/server/auth';
 import { migrateLegacyListingState, migrateLegacyMatches } from '$lib/server/userState';
+import { migrateFinnSearches } from '$lib/server/finnMigration';
 
 // Reachable without logging in. /health is the k8s probe.
 const PUBLIC_PATHS = ['/login', '/health'];
@@ -17,8 +18,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 	return resolve(event);
 };
 
-// Scrape twice a day, Oslo time: once in the morning and once in the afternoon.
-const SCRAPE_HOURS = [8, 16];
+// Scrape once a day, 08:00 Oslo time — hjem.no's API is undocumented, so keep the load light.
+const SCRAPE_HOURS = [8];
 
 // The container is node:alpine without tzdata, so TZ=Europe/Oslo is ignored and
 // Date.getHours() returns UTC. Derive the real Oslo hour via Intl (Node's bundled
@@ -51,11 +52,13 @@ function msUntilNextRun(now: Date): number {
 }
 
 // The one-time data migrations must finish before the first scrape: until Erik's matches and
-// search exist, a scrape would see no searches and treat every listing as new.
+// search exist, a scrape would see no searches and treat every listing as new; until the searches
+// are in hjem.no's codes, it would search for nothing (and then post every listing as new).
 const migrated: Promise<boolean> = building
 	? Promise.resolve(false)
 	: migrateLegacyListingState()
 			.then(migrateLegacyMatches)
+			.then(migrateFinnSearches)
 			.then(
 				() => true,
 				(e) => {
@@ -77,5 +80,5 @@ function scheduleNext(): void {
 	}, delay);
 }
 
-// No scrape on boot, so restarts and deploys don't add runs on top of the two a day
+// No scrape on boot, so restarts and deploys don't add runs on top of the one a day
 if (!building) scheduleNext();

@@ -38,8 +38,8 @@ const SORTS = {
 } as const;
 type Sort = keyof typeof SORTS;
 
-// With two scrapes a day, this means at least the last run failed and the data is falling behind
-const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+// With one scrape a day (08:00), this means the last run failed and the data is falling behind
+const STALE_AFTER_MS = 30 * 60 * 60 * 1000;
 
 function intParam(url: URL, key: string): number | null {
 	const v = url.searchParams.get(key);
@@ -78,7 +78,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	if (!showHidden) conditions.push(sql`not ${hidden}`);
 	if (!showInactive) conditions.push(active);
 
-	// …but favorites stay pinned even after they go inactive (sold / dropped off Finn) or get
+	// …but favorites stay pinned even after they go inactive (sold / dropped off the site) or get
 	// hidden, so a listing you starred doesn't silently vanish the next day.
 	const visibility = or(favorite, and(...conditions));
 
@@ -129,7 +129,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		.where(visibility);
 	const settings = await getSettings(user.id);
 
-	// The last time this user's search returned anything from Finn
+	// The last time this user's search returned anything
 	const [latest] = await db
 		.select({ at: listingMatches.lastSeenAt })
 		.from(listingMatches)

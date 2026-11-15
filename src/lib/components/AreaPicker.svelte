@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { FINN_COUNTIES } from '$lib/locations';
-	import { locationName } from '$lib/search';
+	import { COUNTIES } from '$lib/locations';
+	import { isCounty, locationName } from '$lib/search';
 
 	// Submits as `location` fields (hidden inputs, so municipalities filtered out of view or
 	// covered by a whole county are still sent correctly)
@@ -13,7 +13,7 @@
 	const q = $derived(query.trim().toLocaleLowerCase('nb'));
 
 	function setCounty(code: string, on: boolean) {
-		const county = FINN_COUNTIES.find((c) => c.code === code)!;
+		const county = COUNTIES.find((c) => c.code === code)!;
 		// The whole county replaces any of its municipalities
 		for (const m of county.children) selected.delete(m.code);
 		if (on) selected.add(code);
@@ -26,7 +26,7 @@
 	}
 
 	const visible = $derived(
-		FINN_COUNTIES.map((c) => {
+		COUNTIES.map((c) => {
 			const countyHit = !q || c.name.toLocaleLowerCase('nb').includes(q);
 			const children = countyHit
 				? c.children
@@ -46,7 +46,7 @@
 				<li
 					class="inline-flex items-center gap-1 rounded-full bg-blue-100 py-1 pr-1 pl-3 text-sm text-blue-900"
 				>
-					{locationName(code)}{code.startsWith('0.') ? ' (hele)' : ''}
+					{locationName(code)}{isCounty(code) ? ' (hele)' : ''}
 					<button
 						type="button"
 						onclick={() => selected.delete(code)}
